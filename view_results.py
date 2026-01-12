@@ -1,7 +1,3 @@
-"""
-Скрипт для просмотра результатов обучения из сохраненного чекпоинта
-"""
-
 import torch
 import argparse
 import os
@@ -11,7 +7,7 @@ def view_checkpoint(checkpoint_path):
     Просмотр содержимого чекпоинта
     """
     if not os.path.exists(checkpoint_path):
-        print(f"Файл {checkpoint_path} не найден!")
+        print(f"aайл {checkpoint_path} не найден")
         return
     
     print(f"\n{'='*60}")
@@ -63,7 +59,6 @@ def main():
     args = parser.parse_args()
     
     if args.all:
-        # Показать все чекпоинты
         checkpoint_dir = os.path.dirname(args.checkpoint) if os.path.dirname(args.checkpoint) else 'checkpoints'
         best_model = os.path.join(checkpoint_dir, 'best_model.pth')
         last_checkpoint = os.path.join(checkpoint_dir, 'last_checkpoint.pth')

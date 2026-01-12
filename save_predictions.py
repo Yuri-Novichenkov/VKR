@@ -1,7 +1,3 @@
-"""
-Скрипт для сохранения предсказаний модели в файл
-"""
-
 import torch
 import numpy as np
 import pandas as pd
@@ -21,12 +17,11 @@ def save_predictions(model, test_loader, device, output_file, original_data_file
     all_indices = []
     batch_start_idx = 0
     
-    print('Генерация предсказаний...')
+    print('Генерация предсказаний')
     with torch.no_grad():
         for batch_idx, (features, labels) in enumerate(test_loader):
             features = features.float().to(device)
             
-            # Forward pass
             predictions, _, _ = model(features)
             
             # Получение предсказанных классов
@@ -36,7 +31,6 @@ def save_predictions(model, test_loader, device, output_file, original_data_file
             batch_size, num_points = pred_classes.shape
             for b in range(batch_size):
                 # Получаем индексы точек для этого облака
-                # (нужно будет восстановить исходные индексы)
                 start_idx = batch_start_idx + b * num_points
                 end_idx = start_idx + num_points
                 
@@ -56,7 +50,7 @@ def save_predictions(model, test_loader, device, output_file, original_data_file
     print(f'Исходных точек: {len(original_data)}')
     
     # Создание DataFrame с предсказаниями
-    # Если предсказаний больше чем исходных точек (из-за перекрытия облаков),
+    # Если предсказаний больше чем исходных точек,
     # берем только первые N предсказаний
     num_original = len(original_data)
     if len(all_predictions) > num_original:
@@ -70,7 +64,7 @@ def save_predictions(model, test_loader, device, output_file, original_data_file
     # Сохранение результатов
     print(f'Сохранение результатов в {output_file}...')
     result_data.to_csv(output_file, sep='\t', index=False)
-    print('Готово!')
+    print('Готово')
     
     # Статистика
     print('\nСтатистика предсказаний:')
@@ -95,11 +89,9 @@ def main():
     
     args = parser.parse_args()
     
-    # Устройство
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Использование устройства: {device}')
-    
-    # Загрузка чекпоинта
+
     print(f'Загрузка модели из {args.checkpoint}...')
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     
@@ -112,10 +104,9 @@ def main():
     model = model.to(device)
     model.eval()
     
-    print(f'Модель загружена. Классов: {num_classes}, Признаков: {num_features}')
+    print(f'Модель загружена Классов: {num_classes}, Признаков: {num_features}')
     
-    # Загрузка тестовых данных
-    print('Загрузка тестовых данных...')
+    print('Загрузка тестовых данных')
     import pandas as pd
     test_data_sample = pd.read_csv(args.test_data, sep='\t', nrows=1)
     has_labels = 'Classification' in test_data_sample.columns

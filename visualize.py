@@ -1,7 +1,3 @@
-"""
-Скрипт для визуализации результатов обучения и предсказаний модели
-"""
-
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -14,7 +10,6 @@ import pandas as pd
 from sklearn.metrics import confusion_matrix
 import json
 
-# Настройка стиля графиков
 try:
     plt.style.use('seaborn-v0_8-darkgrid')
 except:
@@ -27,9 +22,6 @@ plt.rcParams['figure.facecolor'] = 'white'
 plt.rcParams['axes.facecolor'] = 'white'
 
 def load_training_history(checkpoint_dir):
-    """
-    Загрузка истории обучения из чекпоинтов
-    """
     history = {
         'epochs': [],
         'train_loss': [],
@@ -40,13 +32,11 @@ def load_training_history(checkpoint_dir):
         'val_miou': []
     }
     
-    # Пытаемся загрузить последний чекпоинт
     last_checkpoint = os.path.join(checkpoint_dir, 'last_checkpoint.pth')
     if os.path.exists(last_checkpoint):
         checkpoint = torch.load(last_checkpoint, map_location='cpu', weights_only=False)
         history['epochs'].append(checkpoint.get('epoch', 0))
     
-    # Загружаем лучшую модель для финальных метрик
     best_checkpoint = os.path.join(checkpoint_dir, 'best_model.pth')
     if os.path.exists(best_checkpoint):
         checkpoint = torch.load(best_checkpoint, map_location='cpu', weights_only=False)
@@ -65,12 +55,8 @@ def load_training_history(checkpoint_dir):
 
 
 def plot_training_curves(history, save_dir):
-    """
-    Построение графиков обучения
-    """
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
     
-    # Loss
     axes[0, 0].plot(history['epochs'], history['train_loss'], 'b-o', label='Train Loss', linewidth=2, markersize=6)
     axes[0, 0].plot(history['epochs'], history['val_loss'], 'r-s', label='Val Loss', linewidth=2, markersize=6)
     axes[0, 0].set_xlabel('Эпоха', fontsize=12)
@@ -79,7 +65,6 @@ def plot_training_curves(history, save_dir):
     axes[0, 0].legend(fontsize=11)
     axes[0, 0].grid(True, alpha=0.3)
     
-    # Accuracy
     axes[0, 1].plot(history['epochs'], history['train_accuracy'], 'b-o', label='Train Accuracy', linewidth=2, markersize=6)
     axes[0, 1].plot(history['epochs'], history['val_accuracy'], 'r-s', label='Val Accuracy', linewidth=2, markersize=6)
     axes[0, 1].set_xlabel('Эпоха', fontsize=12)
@@ -89,7 +74,6 @@ def plot_training_curves(history, save_dir):
     axes[0, 1].grid(True, alpha=0.3)
     axes[0, 1].set_ylim([0, 1])
     
-    # mIoU
     axes[1, 0].plot(history['epochs'], history['train_miou'], 'b-o', label='Train mIoU', linewidth=2, markersize=6)
     axes[1, 0].plot(history['epochs'], history['val_miou'], 'r-s', label='Val mIoU', linewidth=2, markersize=6)
     axes[1, 0].set_xlabel('Эпоха', fontsize=12)
@@ -99,7 +83,6 @@ def plot_training_curves(history, save_dir):
     axes[1, 0].grid(True, alpha=0.3)
     axes[1, 0].set_ylim([0, 1])
     
-    # Сравнение метрик
     metrics = ['Loss', 'Accuracy', 'mIoU']
     train_values = [
         history['train_loss'][-1] if history['train_loss'] else 0,
@@ -132,9 +115,6 @@ def plot_training_curves(history, save_dir):
 
 
 def plot_confusion_matrix_from_checkpoint(checkpoint_path, save_dir, num_classes=11):
-    """
-    Построение confusion matrix из чекпоинта
-    """
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     if 'val_metrics' in checkpoint and 'confusion_matrix' in checkpoint['val_metrics']:
@@ -155,13 +135,10 @@ def plot_confusion_matrix_from_checkpoint(checkpoint_path, save_dir, num_classes
         print(f'Confusion matrix сохранена: {save_path}')
         plt.close()
     else:
-        print('Confusion matrix не найдена в чекпоинте')
+        print('Confusion matrix не найдена')
 
 
 def plot_per_class_iou(checkpoint_path, save_dir, num_classes=11):
-    """
-    Построение графика IoU по классам
-    """
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     if 'val_metrics' in checkpoint and 'per_class_iou' in checkpoint['val_metrics']:
@@ -171,7 +148,6 @@ def plot_per_class_iou(checkpoint_path, save_dir, num_classes=11):
         colors = plt.cm.viridis(np.linspace(0, 1, len(ious)))
         bars = plt.bar(range(len(ious)), ious, color=colors, alpha=0.8, edgecolor='black', linewidth=1.5)
         
-        # Добавляем значения на столбцы
         for i, (bar, iou) in enumerate(zip(bars, ious)):
             height = bar.get_height()
             plt.text(bar.get_x() + bar.get_width()/2., height,
@@ -193,10 +169,6 @@ def plot_per_class_iou(checkpoint_path, save_dir, num_classes=11):
 
 
 def visualize_point_cloud_sample(data_file, predictions_file=None, num_points=10000, save_dir='.'):
-    """
-    Визуализация образца облака точек
-    """
-    # Загрузка данных
     data = pd.read_csv(data_file, sep='\t', nrows=num_points)
     
     x = data['X'].values
@@ -210,7 +182,6 @@ def visualize_point_cloud_sample(data_file, predictions_file=None, num_points=10
     
     fig = plt.figure(figsize=(16, 6))
     
-    # Если есть предсказания, используем их для цветовой кодировки
     if predictions_file and os.path.exists(predictions_file):
         pred_data = pd.read_csv(predictions_file, sep='\t', nrows=num_points)
         if 'Predicted_Classification' in pred_data.columns:
@@ -227,10 +198,10 @@ def visualize_point_cloud_sample(data_file, predictions_file=None, num_points=10
             colors = z
             title_suffix = ''
     
-    # Создаем цветовую карту
+    # цветовая карта
     cmap = plt.cm.tab20 if len(np.unique(colors)) <= 20 else plt.cm.viridis
     
-    # Вид 1: XY проекция
+    # XY
     ax1 = fig.add_subplot(131)
     scatter1 = ax1.scatter(x, y, c=colors, cmap=cmap, s=1, alpha=0.6)
     ax1.set_xlabel('X', fontsize=11)
@@ -239,7 +210,7 @@ def visualize_point_cloud_sample(data_file, predictions_file=None, num_points=10
     ax1.set_aspect('equal')
     plt.colorbar(scatter1, ax=ax1, label='Класс')
     
-    # Вид 2: XZ проекция
+    # XZ 
     ax2 = fig.add_subplot(132)
     scatter2 = ax2.scatter(x, z, c=colors, cmap=cmap, s=1, alpha=0.6)
     ax2.set_xlabel('X', fontsize=11)
@@ -247,7 +218,7 @@ def visualize_point_cloud_sample(data_file, predictions_file=None, num_points=10
     ax2.set_title(f'Вид сбоку (XZ){title_suffix}', fontsize=12, fontweight='bold')
     plt.colorbar(scatter2, ax=ax2, label='Класс')
     
-    # Вид 3: 3D визуализация
+    # 3D 
     ax3 = fig.add_subplot(133, projection='3d')
     scatter3 = ax3.scatter(x, y, z, c=colors, cmap=cmap, s=1, alpha=0.6)
     ax3.set_xlabel('X', fontsize=11)
@@ -263,9 +234,6 @@ def visualize_point_cloud_sample(data_file, predictions_file=None, num_points=10
 
 
 def plot_class_distribution(checkpoint_path, predictions_file=None, save_dir='.'):
-    """
-    Построение графика распределения классов
-    """
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     
     # Распределение из валидации
@@ -283,7 +251,7 @@ def plot_class_distribution(checkpoint_path, predictions_file=None, save_dir='.'
         axes[0].set_xticklabels([f'Class {i}' for i in range(len(val_distribution))])
         axes[0].grid(True, alpha=0.3, axis='y')
     
-    # Распределение из предсказаний (если есть)
+    # Распределение из предсказаний
     if predictions_file and os.path.exists(predictions_file):
         pred_data = pd.read_csv(predictions_file, sep='\t')
         if 'Predicted_Classification' in pred_data.columns:
@@ -305,14 +273,11 @@ def plot_class_distribution(checkpoint_path, predictions_file=None, save_dir='.'
 
 
 def create_summary_report(checkpoint_path, save_dir):
-    """
-    Создание текстового отчета с метриками
-    """
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     report = []
     report.append("="*60)
-    report.append("ОТЧЕТ О РЕЗУЛЬТАТАХ ОБУЧЕНИЯ МОДЕЛИ POINTNET")
+    report.append("ОТЧЕТ")
     report.append("="*60)
     report.append("")
     
@@ -355,7 +320,6 @@ def create_summary_report(checkpoint_path, save_dir):
     
     report_text = "\n".join(report)
     
-    # Сохранение в файл
     save_path = os.path.join(save_dir, 'training_report.txt')
     with open(save_path, 'w', encoding='utf-8') as f:
         f.write(report_text)
@@ -380,8 +344,7 @@ def main():
                        help='Количество классов')
     
     args = parser.parse_args()
-    
-    # Создание директории для визуализаций
+
     os.makedirs(args.output_dir, exist_ok=True)
     
     print("Создание визуализаций...")

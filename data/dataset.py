@@ -1,7 +1,3 @@
-"""
-Загрузчик данных для работы с txt файлами LiDAR данных
-"""
-
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -11,14 +7,11 @@ import random
 
 
 class LiDARDataset(Dataset):
-    """
-    Dataset для загрузки LiDAR данных из txt файлов
-    """
     def __init__(self, data_path, num_points=4096, use_features=None, augment=False, has_labels=True):
         """
         Args:
             data_path: путь к txt файлу с данными
-            num_points: количество точек в облаке (будет выполнена выборка или дополнение)
+            num_points: количество точек в облаке
             use_features: список признаков для использования (None = все)
             augment: применять ли аугментацию данных
             has_labels: есть ли в данных колонка с метками (Classification)
@@ -27,9 +20,8 @@ class LiDARDataset(Dataset):
         self.num_points = num_points
         self.augment = augment
         self.has_labels = has_labels
-        
-        # Загрузка данных
-        print(f"Загрузка данных из {data_path}...")
+
+        print(f"Загрузка данных из {data_path}")
         self.data = pd.read_csv(data_path, sep='\t')
         print(f"Загружено {len(self.data)} точек")
         
@@ -45,14 +37,14 @@ class LiDARDataset(Dataset):
         # Извлечение признаков
         self.features = self.data[self.use_features].values.astype(np.float32)
         
-        # Извлечение меток (если есть)
+        # Извлечение меток
         if has_labels and 'Classification' in self.data.columns:
             self.labels = self.data['Classification'].values.astype(np.int64)
         else:
-            # Создаем фиктивные метки (все нули) для тестового набора без меток
+            # фиктивные метки (все нули) для тестового набора без меток
             self.labels = np.zeros(len(self.features), dtype=np.int64)
             if has_labels:
-                print("Предупреждение: колонка 'Classification' не найдена, используются фиктивные метки")
+                print("используются фиктивные метки")
         
         # Нормализация координат (центрирование и масштабирование)
         self._normalize_coords()
@@ -65,7 +57,7 @@ class LiDARDataset(Dataset):
             self.classes = np.unique(self.labels)
             self.num_classes = len(self.classes)
             
-            # Создание маппинга классов на последовательные индексы [0, 1, 2, ...]
+            # Создание маппинга классов на последовательные индексы 
             self.class_to_idx = {cls: idx for idx, cls in enumerate(self.classes)}
             self.idx_to_class = {idx: cls for cls, idx in self.class_to_idx.items()}
             
@@ -83,7 +75,7 @@ class LiDARDataset(Dataset):
         print(f"Маппинг классов: {self.class_to_idx}")
         print(f"Используемые признаки: {self.use_features}")
         
-        # Разбиение на облака точек (можно использовать скользящее окно или фиксированные блоки)
+        # Разбиение на облака точек
         self._create_point_clouds()
         
     def _normalize_coords(self):
@@ -109,11 +101,11 @@ class LiDARDataset(Dataset):
     def _normalize_features(self):
         """Нормализация остальных признаков (R, G, B, Intensity и т.д.)"""
         for i, feature_name in enumerate(self.use_features):
-            # Пропускаем координаты (уже нормализованы)
+            # Пропускаем координаты
             if feature_name in ['X', 'Y', 'Z']:
                 continue
             
-            # Нормализация к диапазону [0, 1] или стандартизация
+            # Нормализация к диапазону [0, 1]
             feature_values = self.features[:, i]
             
             # Для цветов (R, G, B) - нормализация к [0, 1]
@@ -122,7 +114,7 @@ class LiDARDataset(Dataset):
                 if max_val > 0:
                     self.features[:, i] = feature_values / max_val
             
-            # Для Intensity и других - стандартизация
+            # Для Intensity и других стандартизация
             elif feature_name in ['Intensity', 'NumberOfReturns', 'ReturnNumber']:
                 mean = np.mean(feature_values)
                 std = np.std(feature_values)
@@ -132,16 +124,14 @@ class LiDARDataset(Dataset):
     def _create_point_clouds(self):
         """
         Разбиение данных на облака точек фиксированного размера
-        Можно использовать разные стратегии: скользящее окно, случайная выборка и т.д.
         """
         total_points = len(self.features)
         
-        # Простая стратегия: разбиение на непересекающиеся блоки
-        # Для обучения можно использовать случайную выборку
+        # разбиение на непересекающиеся блоки
         self.cloud_indices = []
         
         if total_points < self.num_points:
-            # Если точек меньше, чем нужно, дублируем
+            # Если точек меньше чем нужно дублируем
             num_clouds = 1
             self.cloud_indices = [np.arange(total_points)]
         else:
@@ -167,7 +157,7 @@ class LiDARDataset(Dataset):
         # Получение индексов точек для этого облака
         point_indices = self.cloud_indices[idx]
         
-        # Если точек меньше, чем нужно, дополняем случайными точками
+        # Если точек меньше чем нужно дополняем случайными точками
         if len(point_indices) < self.num_points:
             # Дублируем случайные точки
             additional_indices = np.random.choice(point_indices, 
@@ -175,7 +165,7 @@ class LiDARDataset(Dataset):
                                                  replace=True)
             point_indices = np.concatenate([point_indices, additional_indices])
         
-        # Если точек больше, выбираем случайную подвыборку
+        # Если точек больше выбираем случайную подвыборку
         elif len(point_indices) > self.num_points:
             point_indices = np.random.choice(point_indices, self.num_points, replace=False)
         
@@ -187,13 +177,12 @@ class LiDARDataset(Dataset):
         if self.augment:
             features = self._augment_point_cloud(features)
         
-        # Убеждаемся, что тип данных правильный перед преобразованием
         features = features.astype(np.float32)
         labels = labels.astype(np.int64)
         
         # Преобразование в тензоры с правильным типом
-        features = torch.from_numpy(features).float()  # Явно преобразуем в float32
-        labels = torch.from_numpy(labels).long()  # Явно преобразуем в int64
+        features = torch.from_numpy(features).float()  
+        labels = torch.from_numpy(labels).long() 
         
         return features, labels
     
@@ -238,6 +227,5 @@ class LiDARDataset(Dataset):
             noise = np.random.normal(0, 0.02, points.shape).astype(np.float32)
             points = points + noise
         
-        # Убеждаемся, что тип сохраняется
         return points.astype(np.float32)
 

@@ -1,8 +1,3 @@
-"""
-PointNet модель для семантической сегментации 3D-точечных облаков
-Реализация основана на статье: PointNet: Deep Learning on Point Sets for 3D Classification and Segmentation
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,8 +5,7 @@ import torch.nn.functional as F
 
 class TNet(nn.Module):
     """
-    Transformation Network (T-Net) для выравнивания входных данных
-    Используется для пространственной трансформации координат или признаков
+    T-Net для выравнивания входных данных
     """
     def __init__(self, k=3):
         super(TNet, self).__init__()
@@ -29,7 +23,7 @@ class TNet(nn.Module):
         self.bn1 = nn.BatchNorm1d(64)
         self.bn2 = nn.BatchNorm1d(128)
         self.bn3 = nn.BatchNorm1d(1024)
-        # Используем LayerNorm для полносвязных слоев, так как они работают с batch_size=1
+
         self.bn4 = nn.LayerNorm(512)
         self.bn5 = nn.LayerNorm(256)
         
@@ -38,7 +32,7 @@ class TNet(nn.Module):
     def forward(self, x):
         """
         Args:
-            x: (B, k, N) - входные данные (координаты или признаки)
+            x: (B, k, N) - входные данные 
         Returns:
             transform: (B, k, k) - матрица трансформации
         """
@@ -53,7 +47,7 @@ class TNet(nn.Module):
         x = torch.max(x, 2, keepdim=True)[0]
         x = x.view(batch_size, -1)
         
-        # Полносвязные слои (используем LayerNorm, который работает с любым batch_size)
+        # Полносвязные слои
         x = F.relu(self.bn4(self.fc1(x)))
         x = F.relu(self.bn5(self.fc2(x)))
         x = self.fc3(x)
@@ -69,14 +63,13 @@ class TNet(nn.Module):
 
 class PointNetSegmentation(nn.Module):
     """
-    PointNet для семантической сегментации
-    Предсказывает класс для каждой точки в облаке
+    PointNet
     """
     def __init__(self, num_classes, num_features=9):
         """
         Args:
             num_classes: количество классов для сегментации
-            num_features: количество признаков на точку (X, Y, Z, R, G, B, Intensity, ...)
+            num_features: количество признаков на точку (X, Y, Z, R, G, B, Intensity)
         """
         super(PointNetSegmentation, self).__init__()
         
@@ -101,7 +94,7 @@ class PointNetSegmentation(nn.Module):
         self.bn3 = nn.BatchNorm1d(128)
         self.bn4 = nn.BatchNorm1d(1024)
         
-        # Блоки для сегментации (объединение локальных и глобальных признаков)
+        # Блоки для сегментации объединение локальных и глобальных признаков
         self.conv5 = nn.Conv1d(1088, 512, 1)  # 64 + 1024 = 1088
         self.conv6 = nn.Conv1d(512, 256, 1)
         self.conv7 = nn.Conv1d(256, 128, 1)
@@ -119,7 +112,7 @@ class PointNetSegmentation(nn.Module):
             x: (B, N, F) - батч облаков точек
                B - размер батча
                N - количество точек
-               F - количество признаков (X, Y, Z, R, G, B, Intensity, ...)
+               F - количество признаков (X, Y, Z, R, G, B, Intensity)
         Returns:
             logits: (B, N, num_classes) - логиты для каждого класса для каждой точки
             transform: (B, 3, 3) - матрица трансформации координат (для регуляризации)
@@ -180,7 +173,7 @@ class PointNetSegmentation(nn.Module):
     
     def get_loss(self, predictions, targets, transform_coords, transform_features, lambda_reg=0.001):
         """
-        Вычисление функции потерь с регуляризацией трансформаций
+        Вычисление функции потерь с регуляризацией для трансформаций
         
         Args:
             predictions: (B, N, num_classes) - предсказания модели
@@ -191,15 +184,15 @@ class PointNetSegmentation(nn.Module):
         Returns:
             loss: общая функция потерь
         """
-        # Основная функция потерь (Cross Entropy)
+        # Основная функция потерь Cross Entropy
         # Изменяем форму: (B, N, num_classes) -> (B*N, num_classes) и (B, N) -> (B*N,)
         B, N, num_classes = predictions.shape
-        # Используем reshape вместо view для совместимости
+
         predictions_flat = predictions.reshape(-1, num_classes)
         targets_flat = targets.reshape(-1)
         ce_loss = F.cross_entropy(predictions_flat, targets_flat)
         
-        # Регуляризация трансформаций (поощрение ортогональности)
+        # Регуляризация трансформаций
         I = torch.eye(3, device=transform_coords.device).unsqueeze(0)
         reg_coords = torch.mean(torch.norm(
             torch.bmm(transform_coords, transform_coords.transpose(2, 1)) - I, dim=(1, 2)

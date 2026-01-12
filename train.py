@@ -1,7 +1,3 @@
-"""
-Скрипт для обучения модели PointNet на данных LiDAR
-"""
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -53,9 +49,6 @@ def calculate_metrics(predictions, targets, num_classes):
 
 
 def train_epoch(model, train_loader, optimizer, device, num_classes, lambda_reg=0.001):
-    """
-    Обучение на одной эпохе
-    """
     model.train()
     total_loss = 0
     all_predictions = []
@@ -63,11 +56,9 @@ def train_epoch(model, train_loader, optimizer, device, num_classes, lambda_reg=
     
     pbar = tqdm(train_loader, desc='Training')
     for batch_idx, (features, labels) in enumerate(pbar):
-        # Убеждаемся, что данные в правильном формате (float32)
         features = features.float().to(device)
         labels = labels.long().to(device)
         
-        # Forward pass
         predictions, transform_coords, transform_features = model(features)
         
         # Вычисление потерь
@@ -75,7 +66,6 @@ def train_epoch(model, train_loader, optimizer, device, num_classes, lambda_reg=
             predictions, labels, transform_coords, transform_features, lambda_reg
         )
         
-        # Backward pass
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -86,8 +76,7 @@ def train_epoch(model, train_loader, optimizer, device, num_classes, lambda_reg=
         pred_classes = torch.argmax(predictions, dim=2)
         all_predictions.append(pred_classes)
         all_targets.append(labels)
-        
-        # Обновление прогресс-бара
+
         pbar.set_postfix({
             'loss': f'{loss.item():.4f}',
             'ce_loss': f'{ce_loss.item():.4f}',
@@ -115,28 +104,23 @@ def validate(model, val_loader, device, num_classes):
     with torch.no_grad():
         pbar = tqdm(val_loader, desc='Validation')
         for features, labels in pbar:
-            # Убеждаемся, что данные в правильном формате (float32)
             features = features.float().to(device)
             labels = labels.long().to(device)
-            
-            # Forward pass
+
             predictions, transform_coords, transform_features = model(features)
-            
-            # Вычисление потерь
+
             loss, ce_loss, reg_loss = model.get_loss(
                 predictions, labels, transform_coords, transform_features
             )
             
             total_loss += loss.item()
-            
-            # Сохранение предсказаний
+
             pred_classes = torch.argmax(predictions, dim=2)
             all_predictions.append(pred_classes)
             all_targets.append(labels)
             
             pbar.set_postfix({'loss': f'{loss.item():.4f}'})
-    
-    # Вычисление метрик
+
     all_predictions = torch.cat(all_predictions, dim=0)
     all_targets = torch.cat(all_targets, dim=0)
     metrics = calculate_metrics(all_predictions, all_targets, num_classes)
@@ -161,7 +145,7 @@ def main():
     parser.add_argument('--lr', type=float, default=0.001,
                        help='Скорость обучения')
     parser.add_argument('--num_classes', type=int, default=None,
-                       help='Количество классов (автоматически определяется, если None)')
+                       help='Количество классов')
     parser.add_argument('--lambda_reg', type=float, default=0.001,
                        help='Коэффициент регуляризации трансформаций')
     parser.add_argument('--save_dir', type=str, default='checkpoints',
@@ -174,21 +158,15 @@ def main():
     # Устройство
     if torch.cuda.is_available():
         device = torch.device('cuda')
-        print(f'Использование устройства: {device}')
-        print(f'CUDA версия: {torch.version.cuda}')
-        print(f'GPU: {torch.cuda.get_device_name(0)}')
-        print(f'Количество GPU: {torch.cuda.device_count()}')
+        print(f'device: {device}')
     else:
         device = torch.device('cpu')
-        print(f'Использование устройства: {device}')
-        print('ВНИМАНИЕ: CUDA недоступна! Проверьте установку PyTorch с поддержкой CUDA.')
-        print('Для установки: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118')
+        print('pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118')
     
     # Создание директории для сохранения
     os.makedirs(args.save_dir, exist_ok=True)
     
-    # Загрузка данных
-    print('Загрузка данных...')
+    print('Загрузка данных')
     train_dataset = LiDARDataset(
         args.train_data,
         num_points=args.num_points,
@@ -201,15 +179,13 @@ def main():
         augment=False
     )
     
-    # Определение количества классов
     if args.num_classes is None:
         num_classes = train_dataset.num_classes
     else:
         num_classes = args.num_classes
     
     print(f'Количество классов: {num_classes}')
-    
-    # Data loaders
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -233,18 +209,16 @@ def main():
     model = PointNetSegmentation(num_classes=num_classes, num_features=num_features)
     model = model.to(device)
     
-    print(f'Модель создана. Параметров: {sum(p.numel() for p in model.parameters()):,}')
-    
-    # Оптимизатор
+    print(f'Модель создана Параметров: {sum(p.numel() for p in model.parameters()):,}')
+
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
-    
-    # Возобновление обучения
+
     start_epoch = 0
     best_val_iou = 0
     
     if args.resume:
-        print(f'Загрузка чекпоинта из {args.resume}...')
+        print(f'Загрузка чекпоинта из {args.resume}')
         checkpoint = torch.load(args.resume, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -253,7 +227,7 @@ def main():
         print(f'Возобновление с эпохи {start_epoch}')
     
     # Обучение
-    print('Начало обучения...')
+    print('Начало обучения')
     for epoch in range(start_epoch, args.epochs):
         print(f'\nЭпоха {epoch + 1}/{args.epochs}')
         print('-' * 50)
@@ -302,8 +276,6 @@ def main():
             'num_features': num_features
         }
         torch.save(checkpoint, os.path.join(args.save_dir, 'last_checkpoint.pth'))
-    
-    print('\nОбучение завершено!')
 
 
 if __name__ == '__main__':

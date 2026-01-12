@@ -1,7 +1,3 @@
-"""
-Скрипт для тестирования обученной модели PointNet
-"""
-
 import torch
 import numpy as np
 from torch.utils.data import DataLoader
@@ -93,8 +89,7 @@ def test_model(model, test_loader, device, num_classes, class_names=None, has_la
         for features, labels in test_loader:
             features = features.to(device)
             labels = labels.to(device)
-            
-            # Forward pass
+
             predictions, _, _ = model(features)
             
             # Получение вероятностей
@@ -110,11 +105,11 @@ def test_model(model, test_loader, device, num_classes, class_names=None, has_la
     all_targets = torch.cat(all_targets, dim=0)
     all_probs = torch.cat(all_probs, dim=0)
     
-    # Вычисление метрик (только если есть метки)
+    # Вычисление метрик
     if has_labels:
         metrics = calculate_metrics(all_predictions, all_targets, num_classes, class_names)
     else:
-        # Создаем фиктивные метрики для случая без меток
+        # Создаем фиктивные метрики если надо
         metrics = {
             'accuracy': 0.0,
             'mean_iou': 0.0,
@@ -140,19 +135,16 @@ def main():
                        help='Путь для сохранения результатов')
     
     args = parser.parse_args()
-    
-    # Устройство
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Использование устройства: {device}')
-    
-    # Загрузка чекпоинта
+
     print(f'Загрузка модели из {args.checkpoint}...')
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     
     num_classes = checkpoint['num_classes']
     num_features = checkpoint['num_features']
-    
-    # Создание модели
+
     model = PointNetSegmentation(num_classes=num_classes, num_features=num_features)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
@@ -161,7 +153,7 @@ def main():
     print(f'Модель загружена. Классов: {num_classes}, Признаков: {num_features}')
     
     # Загрузка тестовых данных
-    print('Загрузка тестовых данных...')
+    print('Загрузка тестовых данных')
     # Проверяем, есть ли метки в тестовом файле
     import pandas as pd
     test_data_sample = pd.read_csv(args.test_data, sep='\t', nrows=1)
@@ -174,10 +166,10 @@ def main():
         has_labels=has_labels
     )
     
-    # Если меток нет, используем количество классов из модели
+    # Если меток нет используем количество классов из модели
     if not has_labels:
         test_dataset.num_classes = num_classes
-        print(f"Тестовый набор без меток. Используется {num_classes} классов из модели.")
+        print(f"Тестовый набор без меток Используется {num_classes} классов из модели.")
     
     test_loader = DataLoader(
         test_dataset,
@@ -188,12 +180,11 @@ def main():
     )
     
     # Тестирование
-    print('Тестирование модели...')
+    print('Тестирование модели')
     metrics, predictions, targets, probs = test_model(
         model, test_loader, device, num_classes, has_labels=has_labels
     )
-    
-    # Вывод результатов
+
     print('\n' + '='*50)
     print('РЕЗУЛЬТАТЫ ТЕСТИРОВАНИЯ')
     print('='*50)
@@ -261,8 +252,6 @@ def main():
                     count = pred_counts[i].item()
                     percentage = (count / len(predictions.flatten())) * 100
                     f.write(f'  Класс {i}: {count} точек ({percentage:.2f}%)\n')
-    
-    print('\nТестирование завершено!')
 
 
 if __name__ == '__main__':
