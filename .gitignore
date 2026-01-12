@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyTorch
+*.pth
+*.pt
+checkpoints/
+*.ckpt
+
+# Data files (большие файлы - загружайте отдельно или используйте Git LFS)
+LiDAR/*.txt
+LiDAR/*.laz
+*.laz
+*.las
+
+# Визуализации (можно включить, если нужны)
+visualizations/*.png
+visualizations/*.txt
+# Но оставляем директорию
+!visualizations/.gitkeep
+
+# Результаты и предсказания
+predictions.txt
+results.txt
+*.csv
+
+# Логи
+*.log
+logs/
+
+# Временные файлы
+*.tmp
+*.temp
+.cache/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Документы (если не нужны в репозитории)
+*.docx
+*.doc
+
