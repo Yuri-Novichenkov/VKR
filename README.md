@@ -14,46 +14,14 @@
 │   └── dataset.py           # Загрузчик данных для txt файлов
 ├── train.py                 # Скрипт для обучения модели
 ├── requirements.txt         # Зависимости проекта
-└── README.md               # Документация
+└── README.md               
 ```
 
 ## Установка
-
-1. **Установите PyTorch с CUDA 13.0 (обязательно!):**
-
-   **Windows:**
-   ```bash
-   install_pytorch.bat
-   ```
-   
-   Или вручную:
-   ```bash
-   pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu130
-   ```
-   
-   **Linux/Mac:**
-   ```bash
-   chmod +x install_pytorch.sh
-   ./install_pytorch.sh
-   ```
-   
-   Или вручную:
-   ```bash
-   pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu130
-   ```
-
-2. Установите остальные зависимости:
+1. 
 ```bash
 pip install -r requirements.txt
 ```
-
-**Важно:** PyTorch должен быть установлен с CUDA 13.0 для работы с GPU. Проверьте установку:
-```bash
-python check_gpu.py
-```
-
-## Использование
-
 ### Обучение модели
 
 ```bash
@@ -72,7 +40,7 @@ python train.py --train_data LiDAR/Mar16_train.txt --val_data LiDAR/Mar16_val.tx
 - `--save_dir`: директория для сохранения моделей (по умолчанию: `checkpoints`)
 - `--resume`: путь к чекпоинту для возобновления обучения (опционально)
 
-### Пример
+### п ример
 
 ```bash
 python train.py \
@@ -86,8 +54,6 @@ python train.py \
 ```
 
 ## Формат данных
-
-Входные данные должны быть в формате txt с разделителем табуляции и следующими колонками:
 - `X`, `Y`, `Z`: координаты точек
 - `R`, `G`, `B`: цвет точек
 - `Intensity`: интенсивность
@@ -166,8 +132,6 @@ python visualize.py \
 - `LiDAR/Mar16_val.txt` - валидационный набор  
 - `LiDAR/Mar16_test.txt` - тестовый набор
 
-**Примечание:** Большие файлы данных (LiDAR/*.txt) исключены из репозитория через .gitignore. Загрузите их отдельно или используйте Git LFS.
-
 ## Результаты
 
 - **Валидационный mIoU:** 56.02%
@@ -183,6 +147,4 @@ python visualize.py \
 ## Автор
 
 Новиченков Ю. Д. - ВКР 2024-2025
-
-**Тема ВКР:** Исследование и разработка нейросетевой модели для семантической сегментации 3D-точечных облаков местности на примере Hessigheim 3D Benchmark Dataset.
 
