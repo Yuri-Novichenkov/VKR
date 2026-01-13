@@ -69,15 +69,7 @@ python train.py \
 - `NumberOfReturns`, `ReturnNumber`: информация о возвратах лидара
 - `Classification`: метка класса для каждой точки
 
-
-## Возобновление обучения
-
-
-```bash
-python train.py --resume checkpoints/last_checkpoint.pth
-```
-
-Все результаты будут сохранены в директории `visualizations/`.
+Все сохранены в директории `visualizations/`.
 
 ## Результаты
 
