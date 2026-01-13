@@ -10,6 +10,7 @@ import argparse
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 
 from models.pointnet import PointNetSegmentation
+from models.pointnet_plusplus import PointNetPlusPlusSegmentation
 from data.dataset import LiDARDataset
 
 
@@ -48,7 +49,7 @@ def calculate_metrics(predictions, targets, num_classes):
     }
 
 
-def train_epoch(model, train_loader, optimizer, device, num_classes, lambda_reg=0.001):
+def train_epoch(model, train_loader, optimizer, device, num_classes, lambda_reg=0.001, model_type='pointnet'):
     model.train()
     total_loss = 0
     all_predictions = []
@@ -59,12 +60,15 @@ def train_epoch(model, train_loader, optimizer, device, num_classes, lambda_reg=
         features = features.float().to(device)
         labels = labels.long().to(device)
         
-        predictions, transform_coords, transform_features = model(features)
-        
-        # Вычисление потерь
-        loss, ce_loss, reg_loss = model.get_loss(
-            predictions, labels, transform_coords, transform_features, lambda_reg
-        )
+        # Forward pass в зависимости от типа модели
+        if model_type == 'pointnet':
+            predictions, transform_coords, transform_features = model(features)
+            loss, ce_loss, reg_loss = model.get_loss(
+                predictions, labels, transform_coords, transform_features, lambda_reg
+            )
+        else:  # pointnet++
+            predictions = model(features)
+            loss, ce_loss, reg_loss = model.get_loss(predictions, labels)
         
         optimizer.zero_grad()
         loss.backward()
@@ -77,11 +81,17 @@ def train_epoch(model, train_loader, optimizer, device, num_classes, lambda_reg=
         all_predictions.append(pred_classes)
         all_targets.append(labels)
 
-        pbar.set_postfix({
-            'loss': f'{loss.item():.4f}',
-            'ce_loss': f'{ce_loss.item():.4f}',
-            'reg_loss': f'{reg_loss.item():.4f}'
-        })
+        if reg_loss is not None and reg_loss.item() > 0:
+            pbar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'ce_loss': f'{ce_loss.item():.4f}',
+                'reg_loss': f'{reg_loss.item():.4f}'
+            })
+        else:
+            pbar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'ce_loss': f'{ce_loss.item():.4f}'
+            })
     
     # Вычисление метрик
     all_predictions = torch.cat(all_predictions, dim=0)
@@ -92,7 +102,7 @@ def train_epoch(model, train_loader, optimizer, device, num_classes, lambda_reg=
     return metrics
 
 
-def validate(model, val_loader, device, num_classes):
+def validate(model, val_loader, device, num_classes, model_type='pointnet'):
     """
     Валидация модели
     """
@@ -107,11 +117,15 @@ def validate(model, val_loader, device, num_classes):
             features = features.float().to(device)
             labels = labels.long().to(device)
 
-            predictions, transform_coords, transform_features = model(features)
-
-            loss, ce_loss, reg_loss = model.get_loss(
-                predictions, labels, transform_coords, transform_features
-            )
+            # Forward pass в зависимости от типа модели
+            if model_type == 'pointnet':
+                predictions, transform_coords, transform_features = model(features)
+                loss, ce_loss, reg_loss = model.get_loss(
+                    predictions, labels, transform_coords, transform_features
+                )
+            else:  # pointnet++
+                predictions = model(features)
+                loss, ce_loss, reg_loss = model.get_loss(predictions, labels)
             
             total_loss += loss.item()
 
@@ -126,7 +140,6 @@ def validate(model, val_loader, device, num_classes):
     metrics = calculate_metrics(all_predictions, all_targets, num_classes)
     metrics['loss'] = total_loss / len(val_loader)
     
-    return metrics
     return metrics
 
 
@@ -152,6 +165,8 @@ def main():
                        help='Директория для сохранения моделей')
     parser.add_argument('--resume', type=str, default=None,
                        help='Путь к чекпоинту для возобновления обучения')
+    parser.add_argument('--model', type=str, default='pointnet', choices=['pointnet', 'pointnet++'],
+                       help='Модель для обучения: pointnet или pointnet++')
     
     args = parser.parse_args()
     
@@ -206,10 +221,17 @@ def main():
     
     # Модель
     num_features = len(train_dataset.use_features)
-    model = PointNetSegmentation(num_classes=num_classes, num_features=num_features)
-    model = model.to(device)
+    if args.model == 'pointnet':
+        model = PointNetSegmentation(num_classes=num_classes, num_features=num_features)
+        print(f'Используется модель: PointNet')
+    elif args.model == 'pointnet++':
+        model = PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
+        print(f'Используется модель: PointNet++')
+    else:
+        raise ValueError(f'Неизвестная модель: {args.model}')
     
-    print(f'Модель создана Параметров: {sum(p.numel() for p in model.parameters()):,}')
+    model = model.to(device)
+    print(f'Модель создана. Параметров: {sum(p.numel() for p in model.parameters()):,}')
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
@@ -220,6 +242,11 @@ def main():
     if args.resume:
         print(f'Загрузка чекпоинта из {args.resume}')
         checkpoint = torch.load(args.resume, weights_only=False)
+        # Определяем тип модели из чекпоинта или используем аргумент
+        checkpoint_model_type = checkpoint.get('model_type', args.model)
+        if checkpoint_model_type != args.model:
+            print(f'Предупреждение: тип модели в чекпоинте ({checkpoint_model_type}) не совпадает с аргументом ({args.model})')
+        
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch']
@@ -234,10 +261,10 @@ def main():
         
         # Обучение
         train_metrics = train_epoch(model, train_loader, optimizer, device, 
-                                   num_classes, args.lambda_reg)
+                                   num_classes, args.lambda_reg, args.model)
         
         # Валидация
-        val_metrics = validate(model, val_loader, device, num_classes)
+        val_metrics = validate(model, val_loader, device, num_classes, args.model)
         
         # Обновление learning rate
         scheduler.step()
@@ -260,6 +287,7 @@ def main():
                 'best_val_iou': best_val_iou,
                 'num_classes': num_classes,
                 'num_features': num_features,
+                'model_type': args.model,
                 'train_metrics': train_metrics,
                 'val_metrics': val_metrics
             }
@@ -273,7 +301,8 @@ def main():
             'optimizer_state_dict': optimizer.state_dict(),
             'best_val_iou': best_val_iou,
             'num_classes': num_classes,
-            'num_features': num_features
+            'num_features': num_features,
+            'model_type': args.model
         }
         torch.save(checkpoint, os.path.join(args.save_dir, 'last_checkpoint.pth'))
 

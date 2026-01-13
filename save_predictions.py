@@ -5,10 +5,11 @@ import argparse
 from torch.utils.data import DataLoader
 
 from models.pointnet import PointNetSegmentation
+from models.pointnet_plusplus import PointNetPlusPlusSegmentation
 from data.dataset import LiDARDataset
 
 
-def save_predictions(model, test_loader, device, output_file, original_data_file):
+def save_predictions(model, test_loader, device, output_file, original_data_file, model_type='pointnet'):
     """
     Сохранение предсказаний модели в файл
     """
@@ -22,7 +23,11 @@ def save_predictions(model, test_loader, device, output_file, original_data_file
         for batch_idx, (features, labels) in enumerate(test_loader):
             features = features.float().to(device)
             
-            predictions, _, _ = model(features)
+            # Обработка вывода модели в зависимости от типа
+            if model_type == 'pointnet':
+                predictions, _, _ = model(features)
+            else:  # pointnet++
+                predictions = model(features)
             
             # Получение предсказанных классов
             pred_classes = torch.argmax(predictions, dim=2)  # (B, N)
@@ -98,13 +103,21 @@ def main():
     num_classes = checkpoint['num_classes']
     num_features = checkpoint['num_features']
     
-    # Создание модели
-    model = PointNetSegmentation(num_classes=num_classes, num_features=num_features)
+    model_type = checkpoint.get('model_type', 'pointnet')
+    
+    # Создание модели в зависимости от типа
+    if model_type == 'pointnet':
+        model = PointNetSegmentation(num_classes=num_classes, num_features=num_features)
+    elif model_type == 'pointnet++':
+        model = PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
+    else:
+        raise ValueError(f"Неизвестный тип модели: {model_type}")
+    
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
     model.eval()
     
-    print(f'Модель загружена Классов: {num_classes}, Признаков: {num_features}')
+    print(f'Модель загружена ({model_type}). Классов: {num_classes}, Признаков: {num_features}')
     
     print('Загрузка тестовых данных')
     import pandas as pd
@@ -129,8 +142,7 @@ def main():
         pin_memory=True if torch.cuda.is_available() else False
     )
     
-    # Сохранение предсказаний
-    save_predictions(model, test_loader, device, args.output, args.test_data)
+    save_predictions(model, test_loader, device, args.output, args.test_data, model_type)
 
 
 if __name__ == '__main__':

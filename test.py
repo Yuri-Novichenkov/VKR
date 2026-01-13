@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from models.pointnet import PointNetSegmentation
+from models.pointnet_plusplus import PointNetPlusPlusSegmentation
 from data.dataset import LiDARDataset
 
 
@@ -76,7 +77,7 @@ def plot_confusion_matrix(cm, class_names, save_path=None):
     plt.close()
 
 
-def test_model(model, test_loader, device, num_classes, class_names=None, has_labels=True):
+def test_model(model, test_loader, device, num_classes, class_names=None, has_labels=True, model_type='pointnet'):
     """
     Тестирование модели
     """
@@ -87,10 +88,14 @@ def test_model(model, test_loader, device, num_classes, class_names=None, has_la
     
     with torch.no_grad():
         for features, labels in test_loader:
-            features = features.to(device)
-            labels = labels.to(device)
+            features = features.float().to(device)
+            labels = labels.long().to(device)
 
-            predictions, _, _ = model(features)
+            # Forward pass в зависимости от типа модели
+            if model_type == 'pointnet++':
+                predictions = model(features)
+            else:  # pointnet
+                predictions, _, _ = model(features)
             
             # Получение вероятностей
             probs = torch.softmax(predictions, dim=2)
@@ -145,12 +150,21 @@ def main():
     num_classes = checkpoint['num_classes']
     num_features = checkpoint['num_features']
 
-    model = PointNetSegmentation(num_classes=num_classes, num_features=num_features)
+    model_type = checkpoint.get('model_type', 'pointnet')
+    
+    # Создание модели в зависимости от типа
+    if model_type == 'pointnet':
+        model = PointNetSegmentation(num_classes=num_classes, num_features=num_features)
+    elif model_type == 'pointnet++':
+        model = PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
+    else:
+        raise ValueError(f'Неизвестный тип модели: {model_type}')
+    
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
     model.eval()
     
-    print(f'Модель загружена. Классов: {num_classes}, Признаков: {num_features}')
+    print(f'Модель загружена ({model_type}). Классов: {num_classes}, Признаков: {num_features}')
     
     # Загрузка тестовых данных
     print('Загрузка тестовых данных')
@@ -182,7 +196,7 @@ def main():
     # Тестирование
     print('Тестирование модели')
     metrics, predictions, targets, probs = test_model(
-        model, test_loader, device, num_classes, has_labels=has_labels
+        model, test_loader, device, num_classes, has_labels=has_labels, model_type=model_type
     )
 
     print('\n' + '='*50)
