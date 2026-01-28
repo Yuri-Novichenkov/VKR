@@ -8,12 +8,13 @@
 
 ```
 .
-├── models/
-│   └── pointnet.py          # Реализация модели PointNet
-├── data/
-│   └── dataset.py           # Загрузчик данных для txt файлов
-├── train.py                 # Скрипт для обучения модели
-├── compare_models.py        # Скрипт для сравнения моделей
+├── src/
+│   ├── models/              # Модели (PointNet, PointNet++, DGCNN, LDGCNN)
+│   ├── data/                # Загрузчики данных
+│   └── utils/               # Общие операции (kNN, EdgeConv)
+├── scripts/                 # Скрипты (train/test/visualize и др.)
+├── notebooks/               # Jupyter notebooks
+├── Files/                   # Данные (Mar16, Mar18)
 ├── requirements.txt         # Зависимости проекта
 └── README.md               
 ```
@@ -24,21 +25,44 @@
 pip install -r requirements.txt
 ```
 ### Обучение модели
-
-**PointNet:**
+С рекомендуемыми параметрами
+**PointNet (сегментация):**
 ```bash
-python train.py --train_data LiDAR/Mar16_train.txt --val_data LiDAR/Mar16_val.txt --model pointnet
+python scripts/train.py --model pointnet --task segmentation --dataset Mar16 --amp \
+  --num_points 4096 --batch_size 8 \
+  --lr 0.001 --epochs 80 \
+  --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
 ```
 
-**PointNet++:**
+**PointNet++ (сегментация):**
 ```bash
-python train.py --train_data LiDAR/Mar16_train.txt --val_data LiDAR/Mar16_val.txt --model pointnet++
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --amp \
+  --num_points 4096 --batch_size 4 \
+  --lr 0.001 --epochs 100 \
+  --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
+```
+
+**DGCNN (сегментация):**
+```bash
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 --amp --k 8 --num_points 2048 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --batch_size 2
+```
+
+**LDGCNN (сегментация):**
+```bash
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --amp --num_points 2048 --batch_size 2 --k_small 8 --k_large 16 --lr 0.001 --epochs 80 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
+```
+
+**Для генерации кэша:**
+```bash
+python scripts/train.py --dataset Mar16 --num_points 4096 --cache_dir cache --cache_mode write --cache_chunked --chunk_size 512 --cache_only
 ```
 
 ### Параметры обучения
 
-- `--train_data`: путь к обучающему набору данных (по умолчанию: `LiDAR/Mar16_train.txt`)
-- `--val_data`: путь к валидационному набору данных (по умолчанию: `LiDAR/Mar16_val.txt`)
+- `--train_data`: путь к обучающему набору данных (опционально)
+- `--val_data`: путь к валидационному набору данных (опционально)
+- `--data_root`: корень данных, например `Files/Mar18/LiDAR`
+- `--dataset`: префикс датасета (`Mar16` или `Mar18`)
 - `--num_points`: количество точек в облаке (по умолчанию: 4096)
 - `--batch_size`: размер батча (по умолчанию: 8)
 - `--epochs`: количество эпох (по умолчанию: 100)
@@ -46,21 +70,8 @@ python train.py --train_data LiDAR/Mar16_train.txt --val_data LiDAR/Mar16_val.tx
 - `--lambda_reg`: коэффициент регуляризации трансформаций (по умолчанию: 0.001)
 - `--save_dir`: директория для сохранения моделей (по умолчанию: `checkpoints`)
 - `--resume`: путь к чекпоинту для возобновления обучения (опционально)
-- `--model`: модель для обучения - `pointnet` или `pointnet++` (по умолчанию: `pointnet`)
-- `--model`: модель для обучения - `pointnet` или `pointnet++` (по умолчанию: `pointnet`)
-
-### п ример
-
-```bash
-python train.py \
-    --train_data LiDAR/Mar16_train.txt \
-    --val_data LiDAR/Mar16_val.txt \
-    --num_points 4096 \
-    --batch_size 8 \
-    --epochs 100 \
-    --lr 0.001 \
-    --save_dir checkpoints
-```
+- `--model`: модель (`pointnet`, `pointnet++`, `dgcnn`, `ldgcnn`)
+- `--task`: задача (`segmentation` или `classification`)
 
 ## Формат данных
 - `X`, `Y`, `Z`: координаты точек
@@ -69,30 +80,33 @@ python train.py \
 - `NumberOfReturns`, `ReturnNumber`: информация о возвратах лидара
 - `Classification`: метка класса для каждой точки
 
+## Данные
+
+Данные лежат в `Files/`:
+- `Files/Mar16/LiDAR/Mar16_train.txt`
+- `Files/Mar16/LiDAR/Mar16_val.txt`
+- `Files/Mar16/LiDAR/Mar16_test.txt`
+- `Files/Mar18/LiDAR/Mar18_train.txt`
+- `Files/Mar18/LiDAR/Mar18_val.txt`
+- `Files/Mar18/LiDAR/Mar18_test.txt`
+
 
 ## Возобновление обучения
 
 
 ```bash
-python train.py --resume checkpoints/last_checkpoint.pth
+python scripts/train.py --resume checkpoints/last_checkpoint.pth
 ```
 
 Все результаты будут сохранены в директории `visualizations/`.
 
-## Результаты
+## MLflow
 
-### PointNet
-- **Валидационный mIoU:** 56.02%
-- **Accuracy на валидации:** 88.14%
-- **Количество классов:** 11
-- **Параметров модели:** 3,533,204
-
-### PointNet++
-- **Валидационный mIoU:** 51.74%
-- **Accuracy на валидации:** 86.84%
-- **Количество классов:** 11
-- **Параметров модели:** 1,404,747
-- **Эпоха лучшей модели:** 99
+Логи экспериментов пишутся локально в `mlruns/`.
+Пример запуска:
+```bash
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar18 --experiment_name PointCloudExperiments
+```
 
 ## Литература
 
