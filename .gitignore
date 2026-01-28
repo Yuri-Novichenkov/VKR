@@ -44,6 +44,7 @@ checkpoints/
 *.ckpt
 
 # Data files (большие файлы - загружайте отдельно или используйте Git LFS)
+Files/
 LiDAR/*.txt
 LiDAR/*.laz
 *.laz
@@ -59,15 +60,24 @@ visualizations/*.txt
 predictions.txt
 results.txt
 *.csv
+predictions_*.txt
+results_*.txt
+
+# Артефакты сравнения/презентаций
+comparison/
+presentation/
 
 # Логи
 *.log
 logs/
+mlruns/
+mlflow.db
 
 # Временные файлы
 *.tmp
 *.temp
 .cache/
+cache/
 
 # OS
 Thumbs.db

@@ -1,0 +1,19 @@
+# Сегментация DGCNN на Mar18
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar18
+
+# Классификация LDGCNN на Mar18
+python scripts/train.py --model ldgcnn --task classification --dataset Mar18
+
+# Тестирование
+python scripts/test.py --checkpoint checkpoints/best_model.pth --dataset Mar18
+
+# Визуализация
+python scripts/visualize.py --checkpoint checkpoints/best_model.pth --test_data Files/Mar18/LiDAR/Mar18_test.txt --predictions predictions_pointnetpp.txt --output_dir visualizations/pointnetpp
+
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 --amp --k 8 --num_points 2048 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --batch_size 2
+
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar18 --amp --k 8 --num_points 2048 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --num_workers 4 --allow_windows_workers
+
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar18 --amp --k 8 --num_points 2048 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --num_workers 2 --prefetch_factor 2 --persistent_workers
+
+python scripts/train.py --dataset Mar18 --num_points 4096 --cache_dir cache --cache_mode write --cache_chunked --chunk_size 512 --cache_only
