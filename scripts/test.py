@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 import mlflow
@@ -90,9 +91,17 @@ def main():
     parser.add_argument("--batch_size", type=int, default=8, help="Размер батча")
     parser.add_argument("--save_results", type=str, default=None, help="Путь для сохранения результатов")
     parser.add_argument("--experiment_name", type=str, default="PointCloudExperiments", help="MLflow experiment name")
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"], help="Устройство для инференса")
     args = parser.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.device == "cpu":
+        device = torch.device("cpu")
+    elif args.device == "cuda":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device.type != "cuda":
+            print("CUDA недоступна, переключаюсь на CPU.")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Использование устройства: {device}")
 
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
@@ -121,11 +130,15 @@ def main():
 
     all_predictions = []
     all_targets = []
+    total_points = 0
+    total_batches = 0
+    inference_start = time.perf_counter()
     with torch.no_grad():
         for features, labels in test_loader:
             features = features.float().to(device)
             labels = labels.long().to(device)
 
+            batch_start = time.perf_counter()
             if task == "classification":
                 predictions = model(features)
                 pred_classes = torch.argmax(predictions, dim=1)
@@ -135,10 +148,19 @@ def main():
                 else:
                     predictions = model(features)
                 pred_classes = torch.argmax(predictions, dim=2)
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            _ = time.perf_counter() - batch_start
 
             all_predictions.append(pred_classes)
             all_targets.append(labels)
+            total_batches += 1
+            if task == "classification":
+                total_points += labels.shape[0]
+            else:
+                total_points += labels.numel()
 
+    inference_time = time.perf_counter() - inference_start
     all_predictions = torch.cat(all_predictions, dim=0)
     all_targets = torch.cat(all_targets, dim=0)
 
@@ -149,6 +171,9 @@ def main():
     print(f"Accuracy: {metrics['accuracy']:.4f}")
     if task == "segmentation":
         print(f"mIoU: {metrics['mean_iou']:.4f}")
+    if inference_time > 0:
+        print(f"Inference time: {inference_time:.2f} сек")
+        print(f"Points per sec: {total_points / inference_time:,.0f}")
 
     if args.save_results:
         with open(args.save_results, "w", encoding="utf-8") as f:
@@ -157,6 +182,9 @@ def main():
             f.write(f"Accuracy: {metrics['accuracy']:.4f}\n")
             if task == "segmentation":
                 f.write(f"mIoU: {metrics['mean_iou']:.4f}\n")
+            if inference_time > 0:
+                f.write(f"Inference time: {inference_time:.2f} сек\n")
+                f.write(f"Points per sec: {total_points / inference_time:,.0f}\n")
 
     mlflow.set_experiment(args.experiment_name)
     with mlflow.start_run(run_name=f"{model_type}_{task}_test"):
@@ -164,6 +192,9 @@ def main():
         mlflow.log_metric("test_accuracy", metrics["accuracy"])
         if task == "segmentation":
             mlflow.log_metric("test_miou", metrics["mean_iou"])
+        if inference_time > 0:
+            mlflow.log_metric("inference_time_sec", inference_time)
+            mlflow.log_metric("points_per_sec", total_points / inference_time)
 
 
 if __name__ == "__main__":

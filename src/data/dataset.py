@@ -66,7 +66,7 @@ class LiDARDataset(Dataset):
                 return
 
         print(f"Загрузка данных из {data_path}")
-        self.data = pd.read_csv(data_path, sep="\t")
+        self.data = self._load_dataframe(self.data_path)
         print(f"Загружено {len(self.data)} точек")
         
         # Определение признаков
@@ -400,3 +400,40 @@ class LiDARDataset(Dataset):
             points = points + noise
         
         return points.astype(np.float32)
+
+    def _load_dataframe(self, data_path):
+        suffix = data_path.suffix.lower()
+        if suffix in (".laz", ".las"):
+            try:
+                import laspy
+            except ImportError as exc:
+                raise ImportError(
+                    "Для чтения .laz/.las установите laspy и lazrs: "
+                    "pip install laspy lazrs"
+                ) from exc
+
+            las = laspy.read(str(data_path))
+            data = {
+                "X": np.asarray(las.x),
+                "Y": np.asarray(las.y),
+                "Z": np.asarray(las.z),
+            }
+
+            if hasattr(las, "red"):
+                data["R"] = np.asarray(las.red)
+            if hasattr(las, "green"):
+                data["G"] = np.asarray(las.green)
+            if hasattr(las, "blue"):
+                data["B"] = np.asarray(las.blue)
+            if hasattr(las, "intensity"):
+                data["Intensity"] = np.asarray(las.intensity)
+            if hasattr(las, "number_of_returns"):
+                data["NumberOfReturns"] = np.asarray(las.number_of_returns)
+            if hasattr(las, "return_number"):
+                data["ReturnNumber"] = np.asarray(las.return_number)
+            if hasattr(las, "classification"):
+                data["Classification"] = np.asarray(las.classification)
+
+            return pd.DataFrame(data)
+
+        return pd.read_csv(data_path, sep="\t")

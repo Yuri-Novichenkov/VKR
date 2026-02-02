@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.7z
 
 # Virtual Environment
 venv/
@@ -62,6 +63,7 @@ results.txt
 *.csv
 predictions_*.txt
 results_*.txt
+predictions/
 
 # Артефакты сравнения/презентаций
 comparison/

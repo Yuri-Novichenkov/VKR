@@ -28,33 +28,50 @@ pip install -r requirements.txt
 С рекомендуемыми параметрами
 **PointNet (сегментация):**
 ```bash
-python scripts/train.py --model pointnet --task segmentation --dataset Mar16 --amp \
-  --num_points 4096 --batch_size 8 \
-  --lr 0.001 --epochs 80 \
-  --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
+python scripts/train.py --model pointnet --task segmentation --dataset Mar16 --amp --num_points 4096 --batch_size 8 --lr 0.001 --epochs 80 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
 ```
+```bash
+python scripts/test.py --checkpoint checkpoints/pointnet/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+```
+python scripts/predictions.py --checkpoint checkpoints/pointnet/mar16/best_model.pth --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
 
 **PointNet++ (сегментация):**
 ```bash
-python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --amp \
-  --num_points 4096 --batch_size 4 \
-  --lr 0.001 --epochs 100 \
-  --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --amp --num_points 4096 --batch_size 4 --lr 0.001 --epochs 100 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
+```
+```bash
+python scripts/test.py --checkpoint checkpoints/pointnet++/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
 ```
 
 **DGCNN (сегментация):**
 ```bash
 python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 --amp --k 8 --num_points 2048 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --batch_size 2
 ```
+```bash
+python scripts/test.py --checkpoint checkpoints/dgcnn/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+```
 
 **LDGCNN (сегментация):**
 ```bash
 python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --amp --num_points 2048 --batch_size 2 --k_small 8 --k_large 16 --lr 0.001 --epochs 80 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
 ```
+```bash
+python scripts/test.py --checkpoint checkpoints/ldgcnn/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+```
 
 **Для генерации кэша:**
 ```bash
 python scripts/train.py --dataset Mar16 --num_points 4096 --cache_dir cache --cache_mode write --cache_chunked --chunk_size 512 --cache_only
+```
+**Для визуализации файлов:**
+```bash
+python scripts/vizualization.py --data Files/Mar16/LiDAR/Mar16_test.txt --predictions predictions\pointnet\Mar16_test_GroundTruth\Mar16_test_GroundTruth_predictions.txt --color_by pred --max_points 1000000
+```
+```bash
+python scripts/vizualization.py --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --color_by gt --max_points 1000000
+```
+```bash
+python scripts/vizualization.py --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --color_by rgb --max_points 1000000
 ```
 
 ### Параметры обучения
@@ -92,20 +109,16 @@ python scripts/train.py --dataset Mar16 --num_points 4096 --cache_dir cache --ca
 
 
 ## Возобновление обучения
-
-
 ```bash
 python scripts/train.py --resume checkpoints/last_checkpoint.pth
 ```
-
-Все результаты будут сохранены в директории `visualizations/`.
 
 ## MLflow
 
 Логи экспериментов пишутся локально в `mlruns/`.
 Пример запуска:
 ```bash
-python scripts/train.py --model dgcnn --task segmentation --dataset Mar18 --experiment_name PointCloudExperiments
+mlflow ui --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns
 ```
 
 ## Литература
@@ -116,5 +129,5 @@ python scripts/train.py --model dgcnn --task segmentation --dataset Mar18 --expe
 
 ## Автор
 
-Новиченков Ю. Д. - ВКР 2024-2025
+Новиченков Ю. Д. - ВКР 2025-2026
 
