@@ -1,3 +1,10 @@
+"""
+Генерация предсказаний сегментации и сохранение их в tab-separated файл.
+
+Важно: скрипт предназначен именно для task=segmentation
+и добавляет колонку Predicted_Classification.
+"""
+
 import argparse
 import os
 import sys
@@ -34,6 +41,8 @@ def build_model(model_type, num_classes, num_features):
 
 
 def load_dataframe(data_path):
+    # Функция дублирует логику чтения из Dataset, чтобы сохранить
+    # исходную таблицу с теми же колонками + предсказания.
     path = Path(data_path)
     suffix = path.suffix.lower()
     if suffix in (".laz", ".las"):
@@ -94,6 +103,8 @@ def main():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Использование устройства: {device}")
 
+    # Загружаем архитектурные параметры из checkpoint,
+    # чтобы корректно восстановить модель.
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     num_classes = checkpoint["num_classes"]
     num_features = checkpoint["num_features"]
@@ -139,6 +150,7 @@ def main():
             pred_classes = torch.argmax(predictions, dim=2)
             all_predictions.append(pred_classes.cpu().numpy())
 
+    # После batch-предсказаний разворачиваем в единый вектор.
     all_predictions = np.concatenate(all_predictions, axis=0).reshape(-1)
 
     df = load_dataframe(args.data)

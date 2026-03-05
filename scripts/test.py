@@ -1,3 +1,11 @@
+"""
+Скрипт оценки обученного checkpoint на test-наборе.
+
+Поддерживает обе задачи:
+- segmentation,
+- classification.
+"""
+
 import argparse
 import os
 import sys
@@ -16,7 +24,9 @@ if str(ROOT) not in sys.path:
 from src.data import LiDARDataset
 from src.models import (
     PointNetSegmentation,
+    PointNetClassification,
     PointNetPlusPlusSegmentation,
+    PointNetPlusPlusClassification,
     DGCNNSegmentation,
     DGCNNClassification,
     LDGCNNSegmentation,
@@ -64,9 +74,17 @@ def calculate_metrics(predictions, targets, num_classes, task="segmentation"):
 
 def build_model(model_type, task, num_classes, num_features):
     if model_type == "pointnet":
-        return PointNetSegmentation(num_classes=num_classes, num_features=num_features)
+        return (
+            PointNetSegmentation(num_classes=num_classes, num_features=num_features)
+            if task == "segmentation"
+            else PointNetClassification(num_classes=num_classes, num_features=num_features)
+        )
     if model_type == "pointnet++":
-        return PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
+        return (
+            PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
+            if task == "segmentation"
+            else PointNetPlusPlusClassification(num_classes=num_classes, num_features=num_features)
+        )
     if model_type == "dgcnn":
         return DGCNNSegmentation(num_classes=num_classes, num_features=num_features) if task == "segmentation" else DGCNNClassification(num_classes=num_classes, num_features=num_features)
     if model_type == "ldgcnn":
@@ -77,6 +95,7 @@ def build_model(model_type, task, num_classes, num_features):
 def resolve_test_path(args):
     if args.test_data:
         return args.test_data
+    # Авто-путь соответствует структуре датасета в проекте.
     data_root = args.data_root or os.path.join("Files", args.dataset, "LiDAR")
     return os.path.join(data_root, f"{args.dataset}_test.txt")
 
@@ -104,6 +123,7 @@ def main():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Использование устройства: {device}")
 
+    # Из checkpoint берем не только веса, но и метаданные (task/model/num_classes).
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     num_classes = checkpoint["num_classes"]
     num_features = checkpoint["num_features"]
@@ -155,6 +175,7 @@ def main():
             all_predictions.append(pred_classes)
             all_targets.append(labels)
             total_batches += 1
+            # Для throughput считаем либо число облаков, либо число точек.
             if task == "classification":
                 total_points += labels.shape[0]
             else:

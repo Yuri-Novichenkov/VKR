@@ -33,8 +33,9 @@ python scripts/train.py --model pointnet --task segmentation --dataset Mar16 --a
 ```bash
 python scripts/test.py --checkpoint checkpoints/pointnet/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
 ```
+```bash
 python scripts/predictions.py --checkpoint checkpoints/pointnet/mar16/best_model.pth --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
-
+```
 **PointNet++ (сегментация):**
 ```bash
 python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --amp --num_points 4096 --batch_size 4 --lr 0.001 --epochs 100 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
@@ -57,6 +58,29 @@ python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --amp
 ```
 ```bash
 python scripts/test.py --checkpoint checkpoints/ldgcnn/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+```
+
+### Классификация облаков (все модели)
+Для задачи `classification` доступны `pointnet`, `pointnet++`, `dgcnn`, `ldgcnn`.
+
+**PointNet (классификация):**
+```bash
+python scripts/train.py --model pointnet --task classification --dataset Mar16 --num_points 4096 --batch_size 8 --lr 0.001 --epochs 80 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
+```
+
+**PointNet++ (классификация):**
+```bash
+python scripts/train.py --model pointnet++ --task classification --dataset Mar16 --num_points 4096 --batch_size 8 --lr 0.001 --epochs 100 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
+```
+
+**DGCNN (классификация):**
+```bash
+python scripts/train.py --model dgcnn --task classification --dataset Mar16 --num_points 2048 --batch_size 8 --lr 0.001 --epochs 100 --k 8 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
+```
+
+**LDGCNN (классификация):**
+```bash
+python scripts/train.py --model ldgcnn --task classification --dataset Mar16 --num_points 2048 --batch_size 8 --lr 0.001 --epochs 100 --k_small 8 --k_large 16 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
 ```
 
 **Для генерации кэша:**
@@ -130,4 +154,3 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlru
 ## Автор
 
 Новиченков Ю. Д. - ВКР 2025-2026
-

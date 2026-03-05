@@ -1,3 +1,12 @@
+"""
+PointNet++ для:
+- семантической сегментации,
+- классификации облаков точек.
+
+В отличие от PointNet, здесь используется иерархия локальных групп:
+sampling -> grouping -> local PointNet (Set Abstraction) -> propagation.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,7 +15,7 @@ from .pointnet import TNet
 
 def square_distance(src, dst):
     """
-    Вычисление квадрата расстояния между двумя наборами точек
+    Вычисление квадратов попарных расстояний между двумя наборами точек.
     Args:
         src: (B, N, C) - исходные точки
         dst: (B, M, C) - целевые точки
@@ -43,7 +52,7 @@ def index_points(points, idx):
 
 def farthest_point_sample(xyz, npoint):
     """
-    выбор наиболее удаленных точек
+    Выбор опорных точек методом farthest point sampling (FPS).
     Args:
         xyz: (B, N, 3) - координаты точек
         npoint: количество точек для выборки
@@ -56,6 +65,8 @@ def farthest_point_sample(xyz, npoint):
     distance = torch.ones(B, N).to(device) * 1e10
     farthest = torch.randint(0, N, (B,), dtype=torch.long).to(device)
 
+    # Итеративно добавляем точку, максимально удаленную
+    # от уже выбранного множества опорных точек.
     for i in range(npoint):
         centroids[:, i] = farthest
         centroid = xyz[torch.arange(B), farthest, :].view(B, 1, 3)
@@ -69,7 +80,7 @@ def farthest_point_sample(xyz, npoint):
 
 def query_ball_point(radius, nsample, xyz, new_xyz):
     """
-    группировка точек в шаре заданного радиуса
+    Поиск соседей в шаре радиуса radius вокруг каждой опорной точки.
     Args:
         radius: радиус шара
         nsample: максимальное количество точек в группе
@@ -83,10 +94,12 @@ def query_ball_point(radius, nsample, xyz, new_xyz):
     _, S, _ = new_xyz.shape
     group_idx = torch.arange(N, dtype=torch.long).to(device).view(1, 1, N).repeat([B, S, 1])
     sqrdists = square_distance(new_xyz, xyz)
+    # Значением N временно помечаем точки вне радиуса.
     group_idx[sqrdists > radius ** 2] = N
     group_idx = group_idx.sort(dim=-1)[0][:, :, :nsample]
     group_first = group_idx[:, :, 0].view(B, S, 1).repeat([1, 1, nsample])
     mask = group_idx == N
+    # Если соседей меньше nsample, дополняем первым валидным соседом.
     group_idx[mask] = group_first[mask]
     return group_idx
 
@@ -140,7 +153,7 @@ def sample_and_group_all(xyz, points):
 
 class PointNetSetAbstraction(nn.Module):
     """
-    основной блок PointNet++
+    Основной блок PointNet++ (Set Abstraction).
     """
     def __init__(self, npoint, radius, nsample, in_channel, mlp, group_all=False):
         super(PointNetSetAbstraction, self).__init__()
@@ -178,7 +191,7 @@ class PointNetSetAbstraction(nn.Module):
             bn = self.mlp_bns[i]
             new_points = F.relu(bn(conv(new_points)))
         
-        # Max pooling по nsample
+        # Max pooling по соседям внутри группы: инвариантная агрегация локального патча.
         new_points = torch.max(new_points, 2)[0]  # (B, mlp[-1], npoint)
         new_points = new_points.permute(0, 2, 1)  # (B, npoint, mlp[-1])
         
@@ -187,7 +200,7 @@ class PointNetSetAbstraction(nn.Module):
 
 class PointNetFeaturePropagation(nn.Module):
     """
-    интерполяция признаков при upsampling
+    Интерполяция признаков при upsampling (decoder часть PointNet++).
     """
     def __init__(self, in_channel, mlp):
         super(PointNetFeaturePropagation, self).__init__()
@@ -219,6 +232,8 @@ class PointNetFeaturePropagation(nn.Module):
             dists, idx = dists.sort(dim=-1)
             dists, idx = dists[:, :, :3], idx[:, :, :3]  # Берем 3 ближайшие точки
 
+            # Взвешенная интерполяция по 3 ближайшим опорам:
+            # вес обратно пропорционален расстоянию.
             dist_recip = 1.0 / (dists + 1e-8)
             norm = torch.sum(dist_recip, dim=2, keepdim=True)
             weight = dist_recip / norm
@@ -240,7 +255,7 @@ class PointNetFeaturePropagation(nn.Module):
 
 class PointNetPlusPlusSegmentation(nn.Module):
     """
-    PointNet++ для семантической сегментации
+    PointNet++ для семантической сегментации.
     """
     def __init__(self, num_classes, num_features=9, normal_channel=False):
         """
@@ -334,3 +349,67 @@ class PointNetPlusPlusSegmentation(nn.Module):
         targets_flat = targets.reshape(-1)
         loss = F.cross_entropy(predictions_flat, targets_flat)
         return loss, loss, torch.tensor(0.0)
+
+
+class PointNetPlusPlusClassification(nn.Module):
+    """
+    PointNet++ для классификации облаков точек.
+    """
+
+    def __init__(self, num_classes, num_features=9, dropout=0.5):
+        super(PointNetPlusPlusClassification, self).__init__()
+        self.num_classes = num_classes
+        self.num_features = num_features
+
+        feature_dim = (num_features - 3) if num_features > 3 else 0
+        self.sa1 = PointNetSetAbstraction(
+            npoint=512,
+            radius=0.2,
+            nsample=32,
+            in_channel=3 + feature_dim,
+            mlp=[64, 64, 128],
+        )
+        self.sa2 = PointNetSetAbstraction(
+            npoint=128,
+            radius=0.4,
+            nsample=64,
+            in_channel=128 + 3,
+            mlp=[128, 128, 256],
+        )
+        self.sa3 = PointNetSetAbstraction(
+            npoint=None,
+            radius=None,
+            nsample=None,
+            in_channel=256 + 3,
+            group_all=True,
+            mlp=[256, 512, 1024],
+        )
+
+        self.fc1 = nn.Linear(1024, 512)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.dp1 = nn.Dropout(dropout)
+        self.fc2 = nn.Linear(512, 256)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.dp2 = nn.Dropout(dropout)
+        self.fc3 = nn.Linear(256, num_classes)
+
+    def forward(self, x):
+        # x: (B, N, F)
+        coords = x[:, :, :3]
+        features = x[:, :, 3:] if x.shape[2] > 3 else None
+
+        l1_xyz, l1_points = self.sa1(coords, features)
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
+        _l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+
+        x = l3_points.squeeze(1)  # (B, 1024)
+        x = F.relu(self.bn1(self.fc1(x)))
+        x = self.dp1(x)
+        x = F.relu(self.bn2(self.fc2(x)))
+        x = self.dp2(x)
+        x = self.fc3(x)
+        return x
+
+    def get_loss(self, predictions, targets):
+        loss = F.cross_entropy(predictions, targets)
+        return loss, loss, torch.tensor(0.0, device=predictions.device)

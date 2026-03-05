@@ -1,3 +1,7 @@
+"""
+LDGCNN: расширение DGCNN с multi-scale соседствами (k_small/k_large).
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,6 +24,8 @@ class _MultiScaleEdgeConv(nn.Module):
 
     def forward(self, x):
         # x: (B, C, N)
+        # Две окрестности разного масштаба помогают одновременно
+        # захватывать локальные и более "широкие" контексты.
         x_small = self.ec_small(get_graph_feature(x, k=self.k_small))
         x_large = self.ec_large(get_graph_feature(x, k=self.k_large))
         x = torch.cat([x_small, x_large], dim=1)
@@ -29,7 +35,7 @@ class _MultiScaleEdgeConv(nn.Module):
 
 class LDGCNNSegmentation(nn.Module):
     """
-    LDGCNN для семантической сегментации (мульти-скейл EdgeConv)
+    LDGCNN для семантической сегментации (мульти-скейл EdgeConv).
     """
     def __init__(self, num_classes, num_features=9, k_small=20, k_large=40, dropout=0.5):
         super().__init__()
@@ -80,7 +86,7 @@ class LDGCNNSegmentation(nn.Module):
 
 class LDGCNNClassification(nn.Module):
     """
-    LDGCNN для классификации облаков точек (мульти-скейл EdgeConv)
+    LDGCNN для классификации облаков точек (мульти-скейл EdgeConv).
     """
     def __init__(self, num_classes, num_features=9, k_small=20, k_large=40, emb_dims=1024, dropout=0.5):
         super().__init__()

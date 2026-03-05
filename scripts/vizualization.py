@@ -1,3 +1,12 @@
+"""
+Визуализация облаков точек через Open3D.
+
+Режимы раскраски:
+- pred: по предсказанным классам;
+- gt: по ground-truth классам;
+- rgb: по исходным цветам точек.
+"""
+
 import argparse
 import os
 from pathlib import Path
@@ -12,6 +21,7 @@ except Exception as exc:
 
 
 def _load_dataframe(data_path):
+    # Поддерживаем как tab-separated TXT, так и LAS/LAZ.
     path = Path(data_path)
     suffix = path.suffix.lower()
     if suffix in (".laz", ".las"):
@@ -66,6 +76,7 @@ def visualize(
 ):
     df = _load_dataframe(data_path)
 
+    # Downsampling нужен для интерактивной скорости на больших сценах.
     if max_points is not None and len(df) > max_points:
         df = df.sample(n=max_points, random_state=seed)
 
@@ -78,6 +89,7 @@ def visualize(
             raise ValueError("Нет Predicted_Classification для режима 'pred'")
         labels = pred_df["Predicted_Classification"].to_numpy(dtype=np.int32)
         num_classes = int(labels.max()) + 1
+        # Фиксируем seed для воспроизводимой палитры классов.
         palette = np.random.RandomState(seed).rand(num_classes, 3)
         colors = palette[labels]
 

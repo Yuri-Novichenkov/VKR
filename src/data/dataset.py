@@ -1,3 +1,15 @@
+"""
+Dataset для LiDAR облаков точек.
+
+Поддерживает:
+- чтение .txt/.las/.laz;
+- нормализацию признаков;
+- разбиение на окна фиксированного размера;
+- аугментации;
+- кэширование (монолитное и чанковое);
+- два режима задачи: segmentation / classification.
+"""
+
 import hashlib
 import json
 import random
@@ -56,6 +68,8 @@ class LiDARDataset(Dataset):
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         cache_path = self._get_cache_path(use_features)
+        # Если кэш найден, загружаем подготовленные тензоры и пропускаем
+        # тяжелый этап парсинга/нормализации/разбиения.
         if self.cache_mode in ("read", "write") and cache_path:
             chunk_manifest = self._get_chunk_manifest_path(cache_path)
             if self.cache_chunked and chunk_manifest.exists():
@@ -104,7 +118,8 @@ class LiDARDataset(Dataset):
         # Нормализация остальных признаков
         self._normalize_features()
         
-        # Получение уникальных классов и создание маппинга
+        # Получение уникальных классов и создание маппинга меток
+        # в непрерывный диапазон [0, num_classes-1] для CrossEntropy.
         if has_labels and "Classification" in self.data.columns:
             self.classes = np.unique(self.labels)
             self.num_classes = len(self.classes)
@@ -127,7 +142,7 @@ class LiDARDataset(Dataset):
         print(f"Маппинг классов: {self.class_to_idx}")
         print(f"Используемые признаки: {self.use_features}")
         
-        # Разбиение на облака точек
+        # Разбиение на облака точек фиксированного размера.
         self._create_point_clouds()
 
         if self.cache_mode == "write" and cache_path:
@@ -190,7 +205,8 @@ class LiDARDataset(Dataset):
             indices = np.random.choice(total_points, self.num_points, replace=True)
             self.cloud_indices = indices.reshape(1, -1).astype(np.int32)
         else:
-            # Разбиваем на облака с перекрытием для увеличения количества данных
+            # Разбиваем на окна с 50% перекрытием:
+            # это увеличивает число обучающих примеров.
             step = self.num_points // 2  # 50% перекрытие
             num_clouds = (total_points - self.num_points) // step + 1
             starts = np.arange(num_clouds, dtype=np.int64) * step
@@ -233,7 +249,7 @@ class LiDARDataset(Dataset):
         labels = torch.from_numpy(labels).long()
 
         if self.task == "classification":
-            # Облачный класс как мода по точкам
+            # Для cloud-level классификации используем класс-моду по точкам окна.
             labels_np = labels.numpy()
             cloud_label = int(np.bincount(labels_np).argmax())
             return features, torch.tensor(cloud_label, dtype=torch.long)
@@ -301,6 +317,8 @@ class LiDARDataset(Dataset):
 
         num_clouds = len(self.cloud_indices)
         chunk_files = []
+        # Чанковый кэш хранит уже нарезанные облака, чтобы быстро грузить
+        # большие датасеты без пикового потребления RAM.
         for start in range(0, num_clouds, self.chunk_size):
             end = min(start + self.chunk_size, num_clouds)
             idx_slice = self.cloud_indices[start:end]

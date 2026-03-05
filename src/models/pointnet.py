@@ -1,3 +1,12 @@
+"""
+Реализация PointNet для двух задач:
+- сегментация (класс каждой точки),
+- классификация облака целиком.
+
+Ключевая идея PointNet: независимая обработка точек shared-MLP слоями
+и симметричная агрегация (max pooling), инвариантная к перестановке точек.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -5,7 +14,7 @@ import torch.nn.functional as F
 
 class TNet(nn.Module):
     """
-    T-Net для выравнивания входных данных
+    T-Net для обучения аффинного выравнивания признаков.
     """
     def __init__(self, k=3):
         super(TNet, self).__init__()
@@ -63,7 +72,7 @@ class TNet(nn.Module):
 
 class PointNetSegmentation(nn.Module):
     """
-    PointNet
+    PointNet для поточечной семантической сегментации.
     """
     def __init__(self, num_classes, num_features=9):
         """
@@ -156,7 +165,8 @@ class PointNetSegmentation(nn.Module):
         global_features = torch.max(x, 2, keepdim=True)[0]  # (B, 1024, 1)
         global_features = global_features.repeat(1, 1, num_points)  # (B, 1024, N)
         
-        # Объединение локальных и глобальных признаков
+        # Объединение локальных и глобальных признаков дает
+        # контекст "точка + облако" перед классификацией каждой точки.
         x = torch.cat([local_features, global_features], dim=1)  # (B, 1088, N)
         
         # Блоки для сегментации
@@ -206,3 +216,67 @@ class PointNetSegmentation(nn.Module):
         total_loss = ce_loss + lambda_reg * (reg_coords + reg_features)
         
         return total_loss, ce_loss, reg_coords + reg_features
+
+
+class PointNetClassification(nn.Module):
+    """
+    PointNet для классификации облаков точек.
+    """
+
+    def __init__(self, num_classes, num_features=9, dropout=0.3):
+        super(PointNetClassification, self).__init__()
+
+        self.num_classes = num_classes
+        self.num_features = num_features
+
+        self.input_transform = TNet(k=3)
+        self.conv1 = nn.Conv1d(num_features, 64, 1)
+        self.conv2 = nn.Conv1d(64, 64, 1)
+        self.bn1 = nn.BatchNorm1d(64)
+        self.bn2 = nn.BatchNorm1d(64)
+
+        self.feature_transform = TNet(k=64)
+        self.conv3 = nn.Conv1d(64, 128, 1)
+        self.conv4 = nn.Conv1d(128, 1024, 1)
+        self.bn3 = nn.BatchNorm1d(128)
+        self.bn4 = nn.BatchNorm1d(1024)
+
+        self.fc1 = nn.Linear(1024, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, num_classes)
+        self.bn5 = nn.BatchNorm1d(512)
+        self.bn6 = nn.BatchNorm1d(256)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # x: (B, N, F)
+        x = x.transpose(2, 1)  # (B, F, N)
+
+        coords = x[:, :3, :]
+        transform_coords = self.input_transform(coords)
+        coords = coords.transpose(2, 1)
+        coords = torch.bmm(coords, transform_coords)
+        coords = coords.transpose(2, 1)
+        x = torch.cat([coords, x[:, 3:, :]], dim=1)
+
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+
+        transform_features = self.feature_transform(x)
+        x = x.transpose(2, 1)
+        x = torch.bmm(x, transform_features)
+        x = x.transpose(2, 1)
+
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = F.relu(self.bn4(self.conv4(x)))
+        x = torch.max(x, 2, keepdim=False)[0]  # (B, 1024)
+
+        x = F.relu(self.bn5(self.fc1(x)))
+        x = F.relu(self.bn6(self.fc2(x)))
+        x = self.dropout(x)
+        x = self.fc3(x)  # (B, num_classes)
+        return x
+
+    def get_loss(self, predictions, targets):
+        loss = F.cross_entropy(predictions, targets)
+        return loss, loss, torch.tensor(0.0, device=predictions.device)

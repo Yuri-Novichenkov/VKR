@@ -1,15 +1,25 @@
+"""
+Базовые операции над облаками точек для графовых моделей (DGCNN/LDGCNN).
+
+Файл содержит:
+- расчет попарных расстояний;
+- поиск k ближайших соседей;
+- построение edge-признаков для EdgeConv.
+"""
+
 import torch
 
 
 def pairwise_distance(x):
     """
-    Вычисляет расстояния попарно.
+    Вычисляет матрицу попарных квадратов расстояний.
     Args:
         x: (B, C, N)
     Returns:
         dist: (B, N, N)
     """
-    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2*a^T*b
+    # Используем тождество ||a-b||^2 = ||a||^2 + ||b||^2 - 2*a^T*b,
+    # чтобы посчитать все расстояния батчево без Python-циклов.
     xx = torch.sum(x ** 2, dim=1, keepdim=True)  # (B, 1, N)
     inner = -2 * torch.matmul(x.transpose(2, 1), x)  # (B, N, N)
     dist = xx.transpose(2, 1) + inner + xx
@@ -18,7 +28,7 @@ def pairwise_distance(x):
 
 def knn(x, k):
     """
-    KNN поиск
+    Поиск k ближайших соседей для каждой точки.
     Args:
         x: (B, C, N)
         k: число соседей
@@ -26,13 +36,14 @@ def knn(x, k):
         idx: (B, N, k)
     """
     dist = pairwise_distance(x)
+    # Для расстояний нужны минимальные значения, поэтому largest=False.
     _, idx = dist.topk(k=k, dim=-1, largest=False, sorted=True)
     return idx
 
 
 def get_graph_feature(x, k=20, idx=None):
     """
-    Формирует edge features для EdgeConv.
+    Формирует edge-признаки для EdgeConv.
     Args:
         x: (B, C, N)
         k: число соседей
@@ -45,6 +56,8 @@ def get_graph_feature(x, k=20, idx=None):
         idx = knn(x, k=k)  # (B, N, k)
 
     device = x.device
+    # Смещаем индексы по батчам, чтобы можно было брать соседей
+    # из "развернутого" тензора shape (B*N, C).
     idx_base = torch.arange(0, B, device=device).view(-1, 1, 1) * N
     idx = idx + idx_base
     idx = idx.view(-1)
@@ -54,14 +67,15 @@ def get_graph_feature(x, k=20, idx=None):
     feature = feature.view(B, N, k, C)  # (B, N, k, C)
     x = x.view(B, N, 1, C).repeat(1, 1, k, 1)
 
-    # edge = concat(x_j - x_i, x_i)
+    # EdgeConv использует пары (x_j - x_i, x_i):
+    # первая часть кодирует локальную разницу, вторая - опорную точку.
     edge_feature = torch.cat((feature - x, x), dim=3).permute(0, 3, 1, 2)
     return edge_feature
 
 
 class EdgeConv(torch.nn.Module):
     """
-    EdgeConv блок
+    Блок EdgeConv: 1x1 Conv2d + BN + LeakyReLU + max по соседям.
     """
     def __init__(self, in_channels, out_channels):
         super().__init__()

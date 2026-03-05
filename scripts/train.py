@@ -1,3 +1,16 @@
+"""
+Скрипт обучения моделей point-cloud задач:
+- segmentation (поточечная классификация),
+- classification (класс облака-окна).
+
+Скрипт отвечает за:
+- подготовку датасета/loader'ов,
+- выбор архитектуры,
+- цикл train/val,
+- сохранение checkpoint'ов,
+- логирование в MLflow.
+"""
+
 import argparse
 import os
 import sys
@@ -20,7 +33,9 @@ if str(ROOT) not in sys.path:
 from src.data import LiDARDataset
 from src.models import (
     PointNetSegmentation,
+    PointNetClassification,
     PointNetPlusPlusSegmentation,
+    PointNetPlusPlusClassification,
     DGCNNSegmentation,
     DGCNNClassification,
     LDGCNNSegmentation,
@@ -40,7 +55,7 @@ def calculate_metrics(predictions, targets, num_classes, task="segmentation"):
             "confusion_matrix": cm,
         }
 
-    # segmentation
+    # segmentation: считаем метрики на уровне отдельных точек.
     accuracy = accuracy_score(targets.flatten(), predictions.flatten())
     cm = confusion_matrix(targets.flatten(), predictions.flatten(), labels=list(range(num_classes)))
 
@@ -195,6 +210,7 @@ def resolve_data_paths(args):
     if args.train_data and args.val_data:
         return args.train_data, args.val_data
 
+    # Если пути не переданы явно, используем соглашение проекта.
     data_root = args.data_root
     if data_root is None:
         data_root = os.path.join("Files", args.dataset, "LiDAR")
@@ -206,9 +222,17 @@ def resolve_data_paths(args):
 
 def build_model(model_type, task, num_classes, num_features, k=20, k_small=20, k_large=40):
     if model_type == "pointnet":
-        return PointNetSegmentation(num_classes=num_classes, num_features=num_features)
+        return (
+            PointNetSegmentation(num_classes=num_classes, num_features=num_features)
+            if task == "segmentation"
+            else PointNetClassification(num_classes=num_classes, num_features=num_features)
+        )
     if model_type == "pointnet++":
-        return PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
+        return (
+            PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
+            if task == "segmentation"
+            else PointNetPlusPlusClassification(num_classes=num_classes, num_features=num_features)
+        )
     if model_type == "dgcnn":
         return (
             DGCNNSegmentation(num_classes=num_classes, num_features=num_features, k=k)
@@ -266,8 +290,10 @@ def main():
         print("Windows: num_workers>0 может приводить к ошибкам. Устанавливаю num_workers=0.")
         args.num_workers = 0
 
+    # Единый формат хранения checkpoint'ов:
+    # checkpoints/<model>/<task>/<dataset>/...
     if args.save_dir == "checkpoints":
-        args.save_dir = os.path.join(args.save_dir, args.model, args.dataset.lower())
+        args.save_dir = os.path.join(args.save_dir, args.model, args.task, args.dataset.lower())
     os.makedirs(args.save_dir, exist_ok=True)
 
     train_data, val_data = resolve_data_paths(args)
@@ -313,6 +339,7 @@ def main():
         train_loader_kwargs["prefetch_factor"] = args.prefetch_factor
         train_loader_kwargs["persistent_workers"] = args.persistent_workers
 
+    # Для Windows по умолчанию num_workers=0 (см. аргументы/guard выше).
     train_loader = DataLoader(
         train_dataset,
         **train_loader_kwargs,
@@ -437,7 +464,8 @@ def main():
                 mlflow.log_metric("train_miou", train_metrics["mean_iou"], step=epoch)
                 mlflow.log_metric("val_miou", val_metrics["mean_iou"], step=epoch)
 
-            # Сохранение лучшей модели
+            # Сохраняем лучшую модель по целевой метрике:
+            # mIoU для segmentation, accuracy для classification.
             if args.task == "segmentation":
                 metric_for_best = val_metrics["mean_iou"]
             else:

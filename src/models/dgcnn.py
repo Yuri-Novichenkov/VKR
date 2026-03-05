@@ -1,3 +1,9 @@
+"""
+Реализации DGCNN для задач:
+- семантической сегментации (класс на каждую точку),
+- классификации облака целиком (один класс на облако).
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,7 +13,12 @@ from ..utils.point_ops import get_graph_feature, EdgeConv, knn
 
 class DGCNNSegmentation(nn.Module):
     """
-    DGCNN для семантической сегментации
+    DGCNN для семантической сегментации.
+
+    Схема:
+    1) несколько EdgeConv-блоков для локальной геометрии;
+    2) конкатенация multi-level признаков;
+    3) point-wise классификатор.
     """
     def __init__(self, num_classes, num_features=9, k=20, emb_dims=1024, dropout=0.5):
         super().__init__()
@@ -34,7 +45,7 @@ class DGCNNSegmentation(nn.Module):
         self.conv3 = nn.Conv1d(128, num_classes, kernel_size=1)
 
     def forward(self, x):
-        # x: (B, N, F)
+        # x: (B, N, F) -> (B, F, N), далее строим граф соседства по точкам.
         x = x.transpose(2, 1).contiguous()  # (B, F, N)
 
         x1 = self.ec1(get_graph_feature(x, k=self.k))
@@ -60,7 +71,10 @@ class DGCNNSegmentation(nn.Module):
 
 class DGCNNClassification(nn.Module):
     """
-    DGCNN для классификации облаков точек
+    DGCNN для классификации облаков точек.
+
+    После EdgeConv формируем глобальный дескриптор cloud-level
+    через max-pooling + avg-pooling и классифицируем его FC-слоями.
     """
     def __init__(self, num_classes, num_features=9, k=20, emb_dims=1024, dropout=0.5):
         super().__init__()
