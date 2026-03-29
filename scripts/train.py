@@ -13,6 +13,7 @@
 
 import argparse
 import os
+import random
 import sys
 from pathlib import Path
 
@@ -220,7 +221,19 @@ def resolve_data_paths(args):
     return train_data, val_data
 
 
-def build_model(model_type, task, num_classes, num_features, k=20, k_small=20, k_large=40):
+def build_model(
+    model_type,
+    task,
+    num_classes,
+    num_features,
+    k=20,
+    k_small=20,
+    k_large=40,
+    attention_type="none",
+    attention_k=16,
+    attention_heads=4,
+    attention_dropout=0.1,
+):
     if model_type == "pointnet":
         return (
             PointNetSegmentation(num_classes=num_classes, num_features=num_features)
@@ -241,11 +254,63 @@ def build_model(model_type, task, num_classes, num_features, k=20, k_small=20, k
         )
     if model_type == "ldgcnn":
         return (
-            LDGCNNSegmentation(num_classes=num_classes, num_features=num_features, k_small=k_small, k_large=k_large)
+            LDGCNNSegmentation(
+                num_classes=num_classes,
+                num_features=num_features,
+                k_small=k_small,
+                k_large=k_large,
+                attention_type=attention_type,
+                attention_k=attention_k,
+                attention_heads=attention_heads,
+                attention_dropout=attention_dropout,
+            )
             if task == "segmentation"
-            else LDGCNNClassification(num_classes=num_classes, num_features=num_features, k_small=k_small, k_large=k_large)
+            else LDGCNNClassification(
+                num_classes=num_classes,
+                num_features=num_features,
+                k_small=k_small,
+                k_large=k_large,
+                attention_type=attention_type,
+                attention_k=attention_k,
+                attention_heads=attention_heads,
+                attention_dropout=attention_dropout,
+            )
         )
     raise ValueError(f"Неизвестная модель: {model_type}")
+
+
+def set_seed(seed):
+    """
+    Фиксирует источники случайности для воспроизводимых запусков.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    # Для воспроизводимости отключаем недетерминированные fast-path режимы.
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    try:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except TypeError:
+        # Для совместимости со старыми версиями PyTorch без warn_only.
+        torch.use_deterministic_algorithms(True)
+
+
+def make_worker_init_fn(base_seed):
+    """
+    Инициализирует RNG каждого DataLoader worker своим seed.
+    """
+
+    def seed_worker(worker_id):
+        worker_seed = base_seed + worker_id
+        random.seed(worker_seed)
+        np.random.seed(worker_seed)
+        torch.manual_seed(worker_seed)
+
+    return seed_worker
 
 
 def main():
@@ -270,6 +335,16 @@ def main():
     parser.add_argument("--k", type=int, default=20, help="k для DGCNN")
     parser.add_argument("--k_small", type=int, default=20, help="k_small для LDGCNN")
     parser.add_argument("--k_large", type=int, default=40, help="k_large для LDGCNN")
+    parser.add_argument(
+        "--attention_type",
+        type=str,
+        default="none",
+        choices=["none", "gatv2", "local_window"],
+        help="Тип attention для LDGCNN",
+    )
+    parser.add_argument("--attention_k", type=int, default=16, help="Размер локального окна attention")
+    parser.add_argument("--attention_heads", type=int, default=4, help="Количество attention heads")
+    parser.add_argument("--attention_dropout", type=float, default=0.1, help="Dropout в attention")
     parser.add_argument("--cache_dir", type=str, default="cache", help="Директория для кэша npz")
     parser.add_argument("--cache_mode", type=str, default="write", choices=["off", "read", "write"], help="Режим кэша")
     parser.add_argument("--cache_chunked", action="store_true", help="Сохранять нарезанные облака чанками")
@@ -278,13 +353,14 @@ def main():
     parser.add_argument("--persistent_workers", action="store_true", help="persistent_workers для DataLoader")
     parser.add_argument("--cache_only", action="store_true", help="Только подготовить кэш и выйти")
     parser.add_argument("--allow_windows_workers", action="store_true", help="Разрешить num_workers>0 на Windows")
+    parser.add_argument("--seed", type=int, default=42, help="Seed для воспроизводимости")
 
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}")
-    if device.type == "cuda":
-        torch.backends.cudnn.benchmark = True
+    set_seed(args.seed)
+    print(f"Seed: {args.seed}")
 
     if os.name == "nt" and args.num_workers > 0 and not args.allow_windows_workers:
         print("Windows: num_workers>0 может приводить к ошибкам. Устанавливаю num_workers=0.")
@@ -292,8 +368,24 @@ def main():
 
     # Единый формат хранения checkpoint'ов:
     # checkpoints/<model>/<task>/<dataset>/...
+    # Для LDGCNN с attention сохраняем в отдельную подпапку варианта,
+    # чтобы E1/E2/E3 не перезаписывали baseline и друг друга.
     if args.save_dir == "checkpoints":
-        args.save_dir = os.path.join(args.save_dir, args.model, args.task, args.dataset.lower())
+        if args.model == "ldgcnn" and args.attention_type != "none":
+            attn_dropout_str = str(args.attention_dropout).replace(".", "p")
+            variant = (
+                f"attn_{args.attention_type}_k{args.attention_k}"
+                f"_h{args.attention_heads}_d{attn_dropout_str}"
+            )
+            args.save_dir = os.path.join(
+                args.save_dir,
+                args.model,
+                args.task,
+                variant,
+                args.dataset.lower(),
+            )
+        else:
+            args.save_dir = os.path.join(args.save_dir, args.model, args.task, args.dataset.lower())
     os.makedirs(args.save_dir, exist_ok=True)
 
     train_data, val_data = resolve_data_paths(args)
@@ -335,6 +427,10 @@ def main():
         "pin_memory": True if torch.cuda.is_available() else False,
         "drop_last": True,
     }
+    loader_generator = torch.Generator()
+    loader_generator.manual_seed(args.seed)
+    train_loader_kwargs["worker_init_fn"] = make_worker_init_fn(args.seed)
+    train_loader_kwargs["generator"] = loader_generator
     if args.num_workers > 0:
         train_loader_kwargs["prefetch_factor"] = args.prefetch_factor
         train_loader_kwargs["persistent_workers"] = args.persistent_workers
@@ -352,6 +448,8 @@ def main():
         "pin_memory": True if torch.cuda.is_available() else False,
         "drop_last": True,
     }
+    val_loader_kwargs["worker_init_fn"] = make_worker_init_fn(args.seed + 10_000)
+    val_loader_kwargs["generator"] = loader_generator
     if args.num_workers > 0:
         val_loader_kwargs["prefetch_factor"] = args.prefetch_factor
         val_loader_kwargs["persistent_workers"] = args.persistent_workers
@@ -370,6 +468,10 @@ def main():
         k=args.k,
         k_small=args.k_small,
         k_large=args.k_large,
+        attention_type=args.attention_type,
+        attention_k=args.attention_k,
+        attention_heads=args.attention_heads,
+        attention_dropout=args.attention_dropout,
     ).to(device)
     print(f"Используется модель: {args.model} ({args.task})")
     print(f"Параметров: {sum(p.numel() for p in model.parameters()):,}")
@@ -385,10 +487,16 @@ def main():
         checkpoint = torch.load(args.resume, weights_only=False)
         checkpoint_model_type = checkpoint.get("model_type", args.model)
         checkpoint_task = checkpoint.get("task", args.task)
+        checkpoint_attention_type = checkpoint.get("attention_type", "none")
         if checkpoint_model_type != args.model:
             print(f"Предупреждение: модель в чекпоинте ({checkpoint_model_type}) не совпадает с аргументом ({args.model})")
         if checkpoint_task != args.task:
             print(f"Предупреждение: task в чекпоинте ({checkpoint_task}) не совпадает с аргументом ({args.task})")
+        if checkpoint_attention_type != args.attention_type:
+            print(
+                "Предупреждение: attention_type в чекпоинте "
+                f"({checkpoint_attention_type}) не совпадает с аргументом ({args.attention_type})"
+            )
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         start_epoch = checkpoint["epoch"]
@@ -411,10 +519,15 @@ def main():
                 "lr": args.lr,
                 "num_classes": num_classes,
                 "num_workers": args.num_workers,
+                "seed": args.seed,
                 "amp": use_amp,
                 "k": args.k,
                 "k_small": args.k_small,
                 "k_large": args.k_large,
+                "attention_type": args.attention_type,
+                "attention_k": args.attention_k,
+                "attention_heads": args.attention_heads,
+                "attention_dropout": args.attention_dropout,
                 "cache_dir": args.cache_dir,
                 "cache_mode": args.cache_mode,
                 "cache_chunked": args.cache_chunked,
@@ -482,6 +595,10 @@ def main():
                     "num_features": num_features,
                     "model_type": args.model,
                     "task": args.task,
+                    "attention_type": args.attention_type,
+                    "attention_k": args.attention_k,
+                    "attention_heads": args.attention_heads,
+                    "attention_dropout": args.attention_dropout,
                     "train_metrics": train_metrics,
                     "val_metrics": val_metrics,
                 }
@@ -500,6 +617,10 @@ def main():
                 "num_features": num_features,
                 "model_type": args.model,
                 "task": args.task,
+                "attention_type": args.attention_type,
+                "attention_k": args.attention_k,
+                "attention_heads": args.attention_heads,
+                "attention_dropout": args.attention_dropout,
             }
             last_path = os.path.join(args.save_dir, "last_checkpoint.pth")
             torch.save(checkpoint, last_path)

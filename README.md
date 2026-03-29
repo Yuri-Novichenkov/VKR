@@ -31,17 +31,23 @@ pip install -r requirements.txt
 python scripts/train.py --model pointnet --task segmentation --dataset Mar16 --amp --num_points 4096 --batch_size 8 --lr 0.001 --epochs 80 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
 ```
 ```bash
-python scripts/test.py --checkpoint checkpoints/pointnet/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+python scripts/train.py --model pointnet --task segmentation --dataset Mar16 --num_points 4096 --batch_size 8 --lr 0.001 --epochs 100 --lambda_reg 0.001 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
 ```
 ```bash
-python scripts/predictions.py --checkpoint checkpoints/pointnet/mar16/best_model.pth --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
+python scripts/test.py --checkpoint checkpoints/pointnet/segmentation/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+```
+```bash
+python scripts/predictions.py --checkpoint checkpoints/pointnet/segmentation/mar16/best_model.pth --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
 ```
 **PointNet++ (сегментация):**
 ```bash
 python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --amp --num_points 4096 --batch_size 4 --lr 0.001 --epochs 100 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
 ```
 ```bash
-python scripts/test.py --checkpoint checkpoints/pointnet++/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --num_points 4096 --batch_size 4 --lr 0.0005 --epochs 120 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+```
+```bash
+python scripts/test.py --checkpoint checkpoints/pointnet++/segmentation/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
 ```
 
 **DGCNN (сегментация):**
@@ -49,7 +55,7 @@ python scripts/test.py --checkpoint checkpoints/pointnet++/mar16/best_model.pth 
 python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 --amp --k 8 --num_points 2048 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --batch_size 2
 ```
 ```bash
-python scripts/test.py --checkpoint checkpoints/dgcnn/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+python scripts/test.py --checkpoint checkpoints/dgcnn/segmentation/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
 ```
 
 **LDGCNN (сегментация):**
@@ -57,7 +63,28 @@ python scripts/test.py --checkpoint checkpoints/dgcnn/mar16/best_model.pth --tes
 python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --amp --num_points 2048 --batch_size 2 --k_small 8 --k_large 16 --lr 0.001 --epochs 80 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
 ```
 ```bash
-python scripts/test.py --checkpoint checkpoints/ldgcnn/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+python scripts/test.py --checkpoint checkpoints/ldgcnn/segmentation/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+```
+
+### Attention эксперименты для LDGCNN (E1/E2)
+`E1` и `E2` запускаются через новые параметры `--attention_type`, `--attention_k`, `--attention_heads`, `--attention_dropout`.
+
+**E1: LDGCNN + GATv2-style attention**
+```bash
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type gatv2 --attention_k 16 --attention_heads 4 --attention_dropout 0.1 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+```
+
+**E2: LDGCNN + Local Window attention**
+```bash
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type local_window --attention_k 8 --attention_heads 4 --attention_dropout 0.1 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+```
+
+**Тест для attention-экспериментов:**
+```bash
+python scripts/test.py --checkpoint checkpoints/ldgcnn/segmentation/attn_gatv2_k16_h4_d0p1/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 2048 --batch_size 4 --device cuda
+```
+```bash
+python scripts/test.py --checkpoint checkpoints/ldgcnn/segmentation/attn_local_window_k8_h4_d0p1/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 2048 --batch_size 4 --device cuda
 ```
 
 ### Классификация облаков (все модели)

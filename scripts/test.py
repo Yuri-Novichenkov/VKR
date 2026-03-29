@@ -72,7 +72,16 @@ def calculate_metrics(predictions, targets, num_classes, task="segmentation"):
     }
 
 
-def build_model(model_type, task, num_classes, num_features):
+def build_model(
+    model_type,
+    task,
+    num_classes,
+    num_features,
+    attention_type="none",
+    attention_k=16,
+    attention_heads=4,
+    attention_dropout=0.1,
+):
     if model_type == "pointnet":
         return (
             PointNetSegmentation(num_classes=num_classes, num_features=num_features)
@@ -88,7 +97,25 @@ def build_model(model_type, task, num_classes, num_features):
     if model_type == "dgcnn":
         return DGCNNSegmentation(num_classes=num_classes, num_features=num_features) if task == "segmentation" else DGCNNClassification(num_classes=num_classes, num_features=num_features)
     if model_type == "ldgcnn":
-        return LDGCNNSegmentation(num_classes=num_classes, num_features=num_features) if task == "segmentation" else LDGCNNClassification(num_classes=num_classes, num_features=num_features)
+        return (
+            LDGCNNSegmentation(
+                num_classes=num_classes,
+                num_features=num_features,
+                attention_type=attention_type,
+                attention_k=attention_k,
+                attention_heads=attention_heads,
+                attention_dropout=attention_dropout,
+            )
+            if task == "segmentation"
+            else LDGCNNClassification(
+                num_classes=num_classes,
+                num_features=num_features,
+                attention_type=attention_type,
+                attention_k=attention_k,
+                attention_heads=attention_heads,
+                attention_dropout=attention_dropout,
+            )
+        )
     raise ValueError(f"Неизвестная модель: {model_type}")
 
 
@@ -129,8 +156,21 @@ def main():
     num_features = checkpoint["num_features"]
     model_type = checkpoint.get("model_type", "pointnet")
     task = checkpoint.get("task", "segmentation")
+    attention_type = checkpoint.get("attention_type", "none")
+    attention_k = checkpoint.get("attention_k", 16)
+    attention_heads = checkpoint.get("attention_heads", 4)
+    attention_dropout = checkpoint.get("attention_dropout", 0.1)
 
-    model = build_model(model_type, task, num_classes, num_features)
+    model = build_model(
+        model_type,
+        task,
+        num_classes,
+        num_features,
+        attention_type=attention_type,
+        attention_k=attention_k,
+        attention_heads=attention_heads,
+        attention_dropout=attention_dropout,
+    )
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()
@@ -209,7 +249,17 @@ def main():
 
     mlflow.set_experiment(args.experiment_name)
     with mlflow.start_run(run_name=f"{model_type}_{task}_test"):
-        mlflow.log_params({"model": model_type, "task": task, "dataset": args.dataset})
+        mlflow.log_params(
+            {
+                "model": model_type,
+                "task": task,
+                "dataset": args.dataset,
+                "attention_type": attention_type,
+                "attention_k": attention_k,
+                "attention_heads": attention_heads,
+                "attention_dropout": attention_dropout,
+            }
+        )
         mlflow.log_metric("test_accuracy", metrics["accuracy"])
         if task == "segmentation":
             mlflow.log_metric("test_miou", metrics["mean_iou"])
