@@ -336,7 +336,7 @@ class PointNetPlusPlusSegmentation(nn.Module):
         
         return feat
     
-    def get_loss(self, predictions, targets):
+    def get_loss(self, predictions, targets, class_weights=None):
         """
         Args:
             predictions: (B, N, num_classes) - предсказания модели
@@ -347,8 +347,8 @@ class PointNetPlusPlusSegmentation(nn.Module):
         B, N, num_classes = predictions.shape
         predictions_flat = predictions.reshape(-1, num_classes)
         targets_flat = targets.reshape(-1)
-        loss = F.cross_entropy(predictions_flat, targets_flat)
-        return loss, loss, torch.tensor(0.0)
+        loss = F.cross_entropy(predictions_flat, targets_flat, weight=class_weights)
+        return loss, loss, torch.tensor(0.0, device=predictions.device)
 
 
 class PointNetPlusPlusClassification(nn.Module):
@@ -410,6 +410,6 @@ class PointNetPlusPlusClassification(nn.Module):
         x = self.fc3(x)
         return x
 
-    def get_loss(self, predictions, targets):
-        loss = F.cross_entropy(predictions, targets)
+    def get_loss(self, predictions, targets, class_weights=None):
+        loss = F.cross_entropy(predictions, targets, weight=class_weights)
         return loss, loss, torch.tensor(0.0, device=predictions.device)

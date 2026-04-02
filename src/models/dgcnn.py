@@ -61,11 +61,11 @@ class DGCNNSegmentation(nn.Module):
         x = x.transpose(2, 1).contiguous()  # (B, N, num_classes)
         return x
 
-    def get_loss(self, predictions, targets):
+    def get_loss(self, predictions, targets, class_weights=None):
         B, N, num_classes = predictions.shape
         predictions_flat = predictions.reshape(-1, num_classes)
         targets_flat = targets.reshape(-1)
-        loss = F.cross_entropy(predictions_flat, targets_flat)
+        loss = F.cross_entropy(predictions_flat, targets_flat, weight=class_weights)
         return loss, loss, torch.tensor(0.0, device=predictions.device)
 
 
@@ -123,6 +123,6 @@ class DGCNNClassification(nn.Module):
         x = self.fc3(x)
         return x
 
-    def get_loss(self, predictions, targets):
-        loss = F.cross_entropy(predictions, targets)
+    def get_loss(self, predictions, targets, class_weights=None):
+        loss = F.cross_entropy(predictions, targets, weight=class_weights)
         return loss, loss, torch.tensor(0.0, device=predictions.device)

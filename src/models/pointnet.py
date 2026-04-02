@@ -181,7 +181,15 @@ class PointNetSegmentation(nn.Module):
         
         return x, transform_coords, transform_features
     
-    def get_loss(self, predictions, targets, transform_coords, transform_features, lambda_reg=0.001):
+    def get_loss(
+        self,
+        predictions,
+        targets,
+        transform_coords,
+        transform_features,
+        lambda_reg=0.001,
+        class_weights=None,
+    ):
         """
         Вычисление функции потерь с регуляризацией для трансформаций
         
@@ -200,7 +208,7 @@ class PointNetSegmentation(nn.Module):
 
         predictions_flat = predictions.reshape(-1, num_classes)
         targets_flat = targets.reshape(-1)
-        ce_loss = F.cross_entropy(predictions_flat, targets_flat)
+        ce_loss = F.cross_entropy(predictions_flat, targets_flat, weight=class_weights)
         
         # Регуляризация трансформаций
         I = torch.eye(3, device=transform_coords.device).unsqueeze(0)
@@ -277,6 +285,6 @@ class PointNetClassification(nn.Module):
         x = self.fc3(x)  # (B, num_classes)
         return x
 
-    def get_loss(self, predictions, targets):
-        loss = F.cross_entropy(predictions, targets)
+    def get_loss(self, predictions, targets, class_weights=None):
+        loss = F.cross_entropy(predictions, targets, weight=class_weights)
         return loss, loss, torch.tensor(0.0, device=predictions.device)

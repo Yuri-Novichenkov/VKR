@@ -20,6 +20,7 @@ from pathlib import Path
 import mlflow
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 from torch import amp
 from contextlib import contextmanager
@@ -112,6 +113,9 @@ def train_epoch(
     lambda_reg=0.001,
     use_amp=False,
     scaler=None,
+    class_weights=None,
+    loss_type="ce",
+    focal_gamma=2.0,
 ):
     model.train()
     total_loss = 0
@@ -126,17 +130,78 @@ def train_epoch(
         with autocast_context(use_amp):
             if task == "classification":
                 predictions = model(features)
-                loss, ce_loss, reg_loss = model.get_loss(predictions, labels)
+                ce_per_sample = F.cross_entropy(
+                    predictions,
+                    labels,
+                    weight=class_weights,
+                    reduction="none",
+                )
+                if loss_type == "ce":
+                    ce_loss = ce_per_sample.mean()
+                elif loss_type in ("focal", "cb_focal"):
+                    pt = torch.exp(-ce_per_sample)
+                    ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                else:
+                    raise ValueError(f"Неизвестный loss_type: {loss_type}")
+                loss = ce_loss
+                reg_loss = torch.tensor(0.0, device=predictions.device)
                 pred_classes = torch.argmax(predictions, dim=1)
             else:
                 if model_type == "pointnet":
                     predictions, transform_coords, transform_features = model(features)
-                    loss, ce_loss, reg_loss = model.get_loss(
-                        predictions, labels, transform_coords, transform_features, lambda_reg
+                    bsz, n_points, n_classes = predictions.shape
+                    predictions_flat = predictions.reshape(-1, n_classes)
+                    labels_flat = labels.reshape(-1)
+                    ce_per_sample = F.cross_entropy(
+                        predictions_flat,
+                        labels_flat,
+                        weight=class_weights,
+                        reduction="none",
                     )
+                    if loss_type == "ce":
+                        ce_loss = ce_per_sample.mean()
+                    elif loss_type in ("focal", "cb_focal"):
+                        pt = torch.exp(-ce_per_sample)
+                        ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                    else:
+                        raise ValueError(f"Неизвестный loss_type: {loss_type}")
+
+                    identity_3 = torch.eye(3, device=transform_coords.device).unsqueeze(0)
+                    reg_coords = torch.mean(
+                        torch.norm(
+                            torch.bmm(transform_coords, transform_coords.transpose(2, 1)) - identity_3,
+                            dim=(1, 2),
+                        )
+                    )
+                    identity_64 = torch.eye(64, device=transform_features.device).unsqueeze(0)
+                    reg_features = torch.mean(
+                        torch.norm(
+                            torch.bmm(transform_features, transform_features.transpose(2, 1)) - identity_64,
+                            dim=(1, 2),
+                        )
+                    )
+                    reg_loss = reg_coords + reg_features
+                    loss = ce_loss + lambda_reg * reg_loss
                 else:
                     predictions = model(features)
-                    loss, ce_loss, reg_loss = model.get_loss(predictions, labels)
+                    bsz, n_points, n_classes = predictions.shape
+                    predictions_flat = predictions.reshape(-1, n_classes)
+                    labels_flat = labels.reshape(-1)
+                    ce_per_sample = F.cross_entropy(
+                        predictions_flat,
+                        labels_flat,
+                        weight=class_weights,
+                        reduction="none",
+                    )
+                    if loss_type == "ce":
+                        ce_loss = ce_per_sample.mean()
+                    elif loss_type in ("focal", "cb_focal"):
+                        pt = torch.exp(-ce_per_sample)
+                        ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                    else:
+                        raise ValueError(f"Неизвестный loss_type: {loss_type}")
+                    loss = ce_loss
+                    reg_loss = torch.tensor(0.0, device=predictions.device)
                 pred_classes = torch.argmax(predictions, dim=2)
 
         optimizer.zero_grad()
@@ -166,7 +231,19 @@ def train_epoch(
     return metrics
 
 
-def validate(model, val_loader, device, num_classes, model_type, task="segmentation", use_amp=False):
+def validate(
+    model,
+    val_loader,
+    device,
+    num_classes,
+    model_type,
+    task="segmentation",
+    use_amp=False,
+    class_weights=None,
+    loss_type="ce",
+    focal_gamma=2.0,
+    lambda_reg=0.001,
+):
     model.eval()
     total_loss = 0
     all_predictions = []
@@ -181,17 +258,78 @@ def validate(model, val_loader, device, num_classes, model_type, task="segmentat
             with autocast_context(use_amp):
                 if task == "classification":
                     predictions = model(features)
-                    loss, ce_loss, reg_loss = model.get_loss(predictions, labels)
+                    ce_per_sample = F.cross_entropy(
+                        predictions,
+                        labels,
+                        weight=class_weights,
+                        reduction="none",
+                    )
+                    if loss_type == "ce":
+                        ce_loss = ce_per_sample.mean()
+                    elif loss_type in ("focal", "cb_focal"):
+                        pt = torch.exp(-ce_per_sample)
+                        ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                    else:
+                        raise ValueError(f"Неизвестный loss_type: {loss_type}")
+                    loss = ce_loss
+                    reg_loss = torch.tensor(0.0, device=predictions.device)
                     pred_classes = torch.argmax(predictions, dim=1)
                 else:
                     if model_type == "pointnet":
                         predictions, transform_coords, transform_features = model(features)
-                        loss, ce_loss, reg_loss = model.get_loss(
-                            predictions, labels, transform_coords, transform_features
+                        bsz, n_points, n_classes = predictions.shape
+                        predictions_flat = predictions.reshape(-1, n_classes)
+                        labels_flat = labels.reshape(-1)
+                        ce_per_sample = F.cross_entropy(
+                            predictions_flat,
+                            labels_flat,
+                            weight=class_weights,
+                            reduction="none",
                         )
+                        if loss_type == "ce":
+                            ce_loss = ce_per_sample.mean()
+                        elif loss_type in ("focal", "cb_focal"):
+                            pt = torch.exp(-ce_per_sample)
+                            ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                        else:
+                            raise ValueError(f"Неизвестный loss_type: {loss_type}")
+
+                        identity_3 = torch.eye(3, device=transform_coords.device).unsqueeze(0)
+                        reg_coords = torch.mean(
+                            torch.norm(
+                                torch.bmm(transform_coords, transform_coords.transpose(2, 1)) - identity_3,
+                                dim=(1, 2),
+                            )
+                        )
+                        identity_64 = torch.eye(64, device=transform_features.device).unsqueeze(0)
+                        reg_features = torch.mean(
+                            torch.norm(
+                                torch.bmm(transform_features, transform_features.transpose(2, 1)) - identity_64,
+                                dim=(1, 2),
+                            )
+                        )
+                        reg_loss = reg_coords + reg_features
+                        loss = ce_loss + lambda_reg * reg_loss
                     else:
                         predictions = model(features)
-                        loss, ce_loss, reg_loss = model.get_loss(predictions, labels)
+                        bsz, n_points, n_classes = predictions.shape
+                        predictions_flat = predictions.reshape(-1, n_classes)
+                        labels_flat = labels.reshape(-1)
+                        ce_per_sample = F.cross_entropy(
+                            predictions_flat,
+                            labels_flat,
+                            weight=class_weights,
+                            reduction="none",
+                        )
+                        if loss_type == "ce":
+                            ce_loss = ce_per_sample.mean()
+                        elif loss_type in ("focal", "cb_focal"):
+                            pt = torch.exp(-ce_per_sample)
+                            ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                        else:
+                            raise ValueError(f"Неизвестный loss_type: {loss_type}")
+                        loss = ce_loss
+                        reg_loss = torch.tensor(0.0, device=predictions.device)
                     pred_classes = torch.argmax(predictions, dim=2)
 
             total_loss += loss.item()
@@ -313,6 +451,42 @@ def make_worker_init_fn(base_seed):
     return seed_worker
 
 
+def compute_class_weights(train_dataset, num_classes, task="segmentation", mode="none", beta=0.999):
+    """
+    Считает веса классов по train-набору.
+    mode:
+      - none: без балансировки
+      - inverse: w_c = 1 / count_c
+      - effective: Class-Balanced Loss (Cui et al.), w_c = (1-beta)/(1-beta^n_c)
+    """
+    if mode == "none":
+        return None
+
+    counts = np.zeros(num_classes, dtype=np.int64)
+    if task == "segmentation":
+        # Проходим по выборке через __getitem__, чтобы работало и для chunked-кэша.
+        for i in range(len(train_dataset)):
+            _features, labels = train_dataset[i]
+            counts += np.bincount(labels.numpy(), minlength=num_classes)
+    else:
+        for i in range(len(train_dataset)):
+            _features, label = train_dataset[i]
+            counts[int(label.item())] += 1
+
+    counts = np.maximum(counts, 1)
+    if mode == "inverse":
+        weights = 1.0 / counts.astype(np.float64)
+    elif mode == "effective":
+        effective_num = 1.0 - np.power(beta, counts.astype(np.float64))
+        weights = (1.0 - beta) / np.maximum(effective_num, 1e-12)
+    else:
+        raise ValueError(f"Неизвестный class_balance режим: {mode}")
+
+    # Нормируем к среднему весу 1.0 для стабильной оптимизации.
+    weights = weights / np.mean(weights)
+    return torch.tensor(weights, dtype=torch.float32)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Обучение моделей для сегментации/классификации")
     parser.add_argument("--train_data", type=str, default=None, help="Путь к обучающему набору")
@@ -345,6 +519,16 @@ def main():
     parser.add_argument("--attention_k", type=int, default=16, help="Размер локального окна attention")
     parser.add_argument("--attention_heads", type=int, default=4, help="Количество attention heads")
     parser.add_argument("--attention_dropout", type=float, default=0.1, help="Dropout в attention")
+    parser.add_argument("--loss_type", type=str, default="ce", choices=["ce", "focal", "cb_focal"], help="Тип функции потерь")
+    parser.add_argument("--focal_gamma", type=float, default=2.0, help="Gamma для focal loss")
+    parser.add_argument(
+        "--class_balance",
+        type=str,
+        default="none",
+        choices=["none", "inverse", "effective"],
+        help="Режим балансировки классов через веса в CrossEntropy",
+    )
+    parser.add_argument("--class_balance_beta", type=float, default=0.999, help="Параметр beta для режима effective")
     parser.add_argument("--cache_dir", type=str, default="cache", help="Директория для кэша npz")
     parser.add_argument("--cache_mode", type=str, default="write", choices=["off", "read", "write"], help="Режим кэша")
     parser.add_argument("--cache_chunked", action="store_true", help="Сохранять нарезанные облака чанками")
@@ -356,6 +540,8 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Seed для воспроизводимости")
 
     args = parser.parse_args()
+    if args.loss_type == "cb_focal" and args.class_balance == "none":
+        raise ValueError("Для --loss_type cb_focal необходимо включить --class_balance (inverse/effective).")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}")
@@ -367,23 +553,26 @@ def main():
         args.num_workers = 0
 
     # Единый формат хранения checkpoint'ов:
-    # checkpoints/<model>/<task>/<dataset>/...
-    # Для LDGCNN с attention сохраняем в отдельную подпапку варианта,
-    # чтобы E1/E2/E3 не перезаписывали baseline и друг друга.
+    # checkpoints/<model>/<task>/<variant>/<dataset>/...
+    # variant формируется из активных режимов (attention/loss/class_balance),
+    # чтобы эксперименты не перезаписывали друг друга.
     if args.save_dir == "checkpoints":
+        variant_parts = []
         if args.model == "ldgcnn" and args.attention_type != "none":
             attn_dropout_str = str(args.attention_dropout).replace(".", "p")
-            variant = (
-                f"attn_{args.attention_type}_k{args.attention_k}"
-                f"_h{args.attention_heads}_d{attn_dropout_str}"
+            variant_parts.append(
+                f"attn_{args.attention_type}_k{args.attention_k}_h{args.attention_heads}_d{attn_dropout_str}"
             )
-            args.save_dir = os.path.join(
-                args.save_dir,
-                args.model,
-                args.task,
-                variant,
-                args.dataset.lower(),
-            )
+        if args.loss_type != "ce":
+            gamma_str = str(args.focal_gamma).replace(".", "p")
+            variant_parts.append(f"loss_{args.loss_type}_g{gamma_str}")
+        if args.class_balance != "none":
+            beta_str = str(args.class_balance_beta).replace(".", "p")
+            variant_parts.append(f"cb_{args.class_balance}_b{beta_str}")
+
+        if variant_parts:
+            variant = "__".join(variant_parts)
+            args.save_dir = os.path.join(args.save_dir, args.model, args.task, variant, args.dataset.lower())
         else:
             args.save_dir = os.path.join(args.save_dir, args.model, args.task, args.dataset.lower())
     os.makedirs(args.save_dir, exist_ok=True)
@@ -419,6 +608,17 @@ def main():
 
     num_classes = train_dataset.num_classes if args.num_classes is None else args.num_classes
     print(f"Количество классов: {num_classes}")
+    class_weights = compute_class_weights(
+        train_dataset,
+        num_classes=num_classes,
+        task=args.task,
+        mode=args.class_balance,
+        beta=args.class_balance_beta,
+    )
+    if class_weights is not None:
+        class_weights = class_weights.to(device)
+        print(f"Включена балансировка классов: {args.class_balance}")
+        print(f"Class weights: {class_weights.detach().cpu().numpy()}")
 
     train_loader_kwargs = {
         "batch_size": args.batch_size,
@@ -528,6 +728,10 @@ def main():
                 "attention_k": args.attention_k,
                 "attention_heads": args.attention_heads,
                 "attention_dropout": args.attention_dropout,
+                "loss_type": args.loss_type,
+                "focal_gamma": args.focal_gamma,
+                "class_balance": args.class_balance,
+                "class_balance_beta": args.class_balance_beta,
                 "cache_dir": args.cache_dir,
                 "cache_mode": args.cache_mode,
                 "cache_chunked": args.cache_chunked,
@@ -553,8 +757,23 @@ def main():
                 lambda_reg=args.lambda_reg,
                 use_amp=use_amp,
                 scaler=scaler,
+                class_weights=class_weights,
+                loss_type=args.loss_type,
+                focal_gamma=args.focal_gamma,
             )
-            val_metrics = validate(model, val_loader, device, num_classes, args.model, task=args.task, use_amp=use_amp)
+            val_metrics = validate(
+                model,
+                val_loader,
+                device,
+                num_classes,
+                args.model,
+                task=args.task,
+                use_amp=use_amp,
+                class_weights=class_weights,
+                loss_type=args.loss_type,
+                focal_gamma=args.focal_gamma,
+                lambda_reg=args.lambda_reg,
+            )
             scheduler.step()
 
             print(
@@ -599,6 +818,10 @@ def main():
                     "attention_k": args.attention_k,
                     "attention_heads": args.attention_heads,
                     "attention_dropout": args.attention_dropout,
+                    "loss_type": args.loss_type,
+                    "focal_gamma": args.focal_gamma,
+                    "class_balance": args.class_balance,
+                    "class_balance_beta": args.class_balance_beta,
                     "train_metrics": train_metrics,
                     "val_metrics": val_metrics,
                 }
@@ -621,6 +844,10 @@ def main():
                 "attention_k": args.attention_k,
                 "attention_heads": args.attention_heads,
                 "attention_dropout": args.attention_dropout,
+                "loss_type": args.loss_type,
+                "focal_gamma": args.focal_gamma,
+                "class_balance": args.class_balance,
+                "class_balance_beta": args.class_balance_beta,
             }
             last_path = os.path.join(args.save_dir, "last_checkpoint.pth")
             torch.save(checkpoint, last_path)

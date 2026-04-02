@@ -66,17 +66,51 @@ python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --amp
 python scripts/test.py --checkpoint checkpoints/ldgcnn/segmentation/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
 ```
 
-### Attention эксперименты для LDGCNN (E1/E2)
-`E1` и `E2` запускаются через новые параметры `--attention_type`, `--attention_k`, `--attention_heads`, `--attention_dropout`.
+### Обучение с class_balance (100 эпох, сегментация)
+Рекомендуемый режим балансировки: `--class_balance effective --class_balance_beta 0.999`.
 
-**E1: LDGCNN + GATv2-style attention**
+**PointNet + class_balance**
 ```bash
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type gatv2 --attention_k 16 --attention_heads 4 --attention_dropout 0.1 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+python scripts/train.py --model pointnet --task segmentation --dataset Mar16 --num_points 4096 --batch_size 8 --lr 0.001 --epochs 100 --lambda_reg 0.001 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
 ```
 
-**E2: LDGCNN + Local Window attention**
+**PointNet++ + class_balance**
 ```bash
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type local_window --attention_k 8 --attention_heads 4 --attention_dropout 0.1 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --num_points 4096 --batch_size 4 --lr 0.0005 --epochs 100 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+```
+
+**DGCNN + class_balance**
+```bash
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --k 16 --lr 0.001 --epochs 100 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+```
+
+**LDGCNN + class_balance**
+```bash
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --k_small 12 --k_large 24 --lr 0.0008 --epochs 100 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+```
+
+### Attention эксперименты для LDGCNN (E1/E2/E3)
+Ниже готовые команды для запуска с балансировкой классов (`class_balance`).
+Чекпоинты для разных режимов (`attention`, `loss_type`, `class_balance`) теперь автоматически сохраняются в отдельные подпапки внутри `checkpoints/<model>/<task>/...`.
+
+**E1: LDGCNN + GATv2-style attention + class_balance**
+```bash
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type gatv2 --attention_k 16 --attention_heads 4 --attention_dropout 0.1 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+```
+
+**E2: LDGCNN + Local Window attention + class_balance**
+```bash
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type local_window --attention_k 8 --attention_heads 4 --attention_dropout 0.1 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+```
+
+**E3: LDGCNN контрольный запуск (без attention) + class_balance**
+```bash
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type none --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
+```
+
+**Опционально для E1/E2/E3: CB-Focal loss**
+```bash
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type gatv2 --attention_k 16 --attention_heads 4 --attention_dropout 0.1 --loss_type cb_focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
 ```
 
 **Тест для attention-экспериментов:**
@@ -140,6 +174,14 @@ python scripts/vizualization.py --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.
 - `--resume`: путь к чекпоинту для возобновления обучения (опционально)
 - `--model`: модель (`pointnet`, `pointnet++`, `dgcnn`, `ldgcnn`)
 - `--task`: задача (`segmentation` или `classification`)
+- `--attention_type`: attention-режим для `ldgcnn` (`none`, `gatv2`, `local_window`)
+- `--attention_k`: размер локального окна attention
+- `--attention_heads`: число attention-heads
+- `--attention_dropout`: dropout attention
+- `--loss_type`: тип loss (`ce`, `focal`, `cb_focal`)
+- `--focal_gamma`: gamma для focal loss (по умолчанию `2.0`)
+- `--class_balance`: балансировка классов в `CrossEntropy` (`none`, `inverse`, `effective`)
+- `--class_balance_beta`: параметр beta для `effective` режима (по умолчанию `0.999`)
 
 ## Формат данных
 - `X`, `Y`, `Z`: координаты точек
