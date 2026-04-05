@@ -487,6 +487,23 @@ def compute_class_weights(train_dataset, num_classes, task="segmentation", mode=
     return torch.tensor(weights, dtype=torch.float32)
 
 
+def build_train_run_name(args):
+    if args.run_name:
+        return args.run_name
+
+    parts = [args.model, args.task, args.dataset.lower()]
+    if args.model == "ldgcnn" and args.attention_type != "none":
+        parts.append(f"attn-{args.attention_type}")
+    if args.loss_type != "ce":
+        parts.append(args.loss_type)
+    if args.class_balance != "none":
+        parts.append(f"cb-{args.class_balance}")
+    parts.append(f"pts{args.num_points}")
+    parts.append(f"bs{args.batch_size}")
+    parts.append(f"seed{args.seed}")
+    return "__".join(parts)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Обучение моделей для сегментации/классификации")
     parser.add_argument("--train_data", type=str, default=None, help="Путь к обучающему набору")
@@ -504,6 +521,7 @@ def main():
     parser.add_argument("--model", type=str, default="pointnet", choices=["pointnet", "pointnet++", "dgcnn", "ldgcnn"], help="Модель")
     parser.add_argument("--task", type=str, default="segmentation", choices=["segmentation", "classification"], help="Задача")
     parser.add_argument("--experiment_name", type=str, default="PointCloudExperiments", help="MLflow experiment name")
+    parser.add_argument("--run_name", type=str, default=None, help="Имя запуска в MLflow")
     parser.add_argument("--num_workers", type=int, default=0, help="DataLoader workers (для Windows лучше 0)")
     parser.add_argument("--amp", action="store_true", help="Включить mixed precision (AMP) на GPU")
     parser.add_argument("--k", type=int, default=20, help="k для DGCNN")
@@ -600,6 +618,7 @@ def main():
         cache_mode=args.cache_mode,
         cache_chunked=args.cache_chunked,
         chunk_size=args.chunk_size,
+        class_to_idx=train_dataset.class_to_idx,
     )
 
     if args.cache_only:
@@ -646,7 +665,7 @@ def main():
         "shuffle": False,
         "num_workers": args.num_workers,
         "pin_memory": True if torch.cuda.is_available() else False,
-        "drop_last": True,
+        "drop_last": False,
     }
     val_loader_kwargs["worker_init_fn"] = make_worker_init_fn(args.seed + 10_000)
     val_loader_kwargs["generator"] = loader_generator
@@ -688,6 +707,9 @@ def main():
         checkpoint_model_type = checkpoint.get("model_type", args.model)
         checkpoint_task = checkpoint.get("task", args.task)
         checkpoint_attention_type = checkpoint.get("attention_type", "none")
+        checkpoint_k = checkpoint.get("k", args.k)
+        checkpoint_k_small = checkpoint.get("k_small", args.k_small)
+        checkpoint_k_large = checkpoint.get("k_large", args.k_large)
         if checkpoint_model_type != args.model:
             print(f"Предупреждение: модель в чекпоинте ({checkpoint_model_type}) не совпадает с аргументом ({args.model})")
         if checkpoint_task != args.task:
@@ -696,6 +718,12 @@ def main():
             print(
                 "Предупреждение: attention_type в чекпоинте "
                 f"({checkpoint_attention_type}) не совпадает с аргументом ({args.attention_type})"
+            )
+        if checkpoint_k != args.k or checkpoint_k_small != args.k_small or checkpoint_k_large != args.k_large:
+            print(
+                "Предупреждение: параметры графа в чекпоинте не совпадают с аргументами запуска "
+                f"(checkpoint: k={checkpoint_k}, k_small={checkpoint_k_small}, k_large={checkpoint_k_large}; "
+                f"args: k={args.k}, k_small={args.k_small}, k_large={args.k_large})"
             )
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -706,7 +734,8 @@ def main():
     scaler = make_scaler(use_amp)
 
     mlflow.set_experiment(args.experiment_name)
-    with mlflow.start_run(run_name=f"{args.model}_{args.task}_{args.dataset}"):
+    run_name = build_train_run_name(args)
+    with mlflow.start_run(run_name=run_name):
         mlflow.log_params(
             {
                 "model": args.model,
@@ -738,6 +767,7 @@ def main():
                 "chunk_size": args.chunk_size,
                 "prefetch_factor": args.prefetch_factor,
                 "persistent_workers": args.persistent_workers,
+                "run_name": run_name,
             }
         )
 
@@ -815,6 +845,9 @@ def main():
                     "model_type": args.model,
                     "task": args.task,
                     "attention_type": args.attention_type,
+                    "k": args.k,
+                    "k_small": args.k_small,
+                    "k_large": args.k_large,
                     "attention_k": args.attention_k,
                     "attention_heads": args.attention_heads,
                     "attention_dropout": args.attention_dropout,
@@ -822,6 +855,8 @@ def main():
                     "focal_gamma": args.focal_gamma,
                     "class_balance": args.class_balance,
                     "class_balance_beta": args.class_balance_beta,
+                    "class_to_idx": train_dataset.class_to_idx,
+                    "idx_to_class": train_dataset.idx_to_class,
                     "train_metrics": train_metrics,
                     "val_metrics": val_metrics,
                 }
@@ -841,6 +876,9 @@ def main():
                 "model_type": args.model,
                 "task": args.task,
                 "attention_type": args.attention_type,
+                "k": args.k,
+                "k_small": args.k_small,
+                "k_large": args.k_large,
                 "attention_k": args.attention_k,
                 "attention_heads": args.attention_heads,
                 "attention_dropout": args.attention_dropout,
@@ -848,6 +886,8 @@ def main():
                 "focal_gamma": args.focal_gamma,
                 "class_balance": args.class_balance,
                 "class_balance_beta": args.class_balance_beta,
+                "class_to_idx": train_dataset.class_to_idx,
+                "idx_to_class": train_dataset.idx_to_class,
             }
             last_path = os.path.join(args.save_dir, "last_checkpoint.pth")
             torch.save(checkpoint, last_path)

@@ -34,6 +34,7 @@ class LiDARDataset(Dataset):
         cache_mode="write",
         cache_chunked=False,
         chunk_size=512,
+        class_to_idx=None,
     ):
         """
         Args:
@@ -56,6 +57,11 @@ class LiDARDataset(Dataset):
         self.cache_mode = cache_mode
         self.cache_chunked = cache_chunked
         self.chunk_size = int(chunk_size)
+        self.external_class_to_idx = (
+            {int(cls): int(idx) for cls, idx in class_to_idx.items()}
+            if class_to_idx is not None
+            else None
+        )
         self._chunk_cache = None
         self._chunk_cache_idx = None
 
@@ -122,20 +128,33 @@ class LiDARDataset(Dataset):
         # в непрерывный диапазон [0, num_classes-1] для CrossEntropy.
         if has_labels and "Classification" in self.data.columns:
             self.classes = np.unique(self.labels)
-            self.num_classes = len(self.classes)
-            
-            # Создание маппинга классов на последовательные индексы 
-            self.class_to_idx = {cls: idx for idx, cls in enumerate(self.classes)}
+            if self.external_class_to_idx is not None:
+                missing_classes = [int(cls) for cls in self.classes if int(cls) not in self.external_class_to_idx]
+                if missing_classes:
+                    raise ValueError(
+                        "В данных найдены классы, отсутствующие в переданном mapping: "
+                        f"{missing_classes}"
+                    )
+                self.class_to_idx = dict(self.external_class_to_idx)
+            else:
+                # Создание маппинга классов на последовательные индексы
+                self.class_to_idx = {int(cls): idx for idx, cls in enumerate(self.classes)}
             self.idx_to_class = {idx: cls for cls, idx in self.class_to_idx.items()}
-            
+            self.num_classes = len(self.class_to_idx)
+
             # Применение маппинга к меткам
             self.labels = np.array([self.class_to_idx[cls] for cls in self.labels], dtype=np.int64)
         else:
             # Для тестового набора без меток используем фиктивные значения
             self.classes = np.array([0])
-            self.num_classes = 1  # Будет переопределено при загрузке модели
-            self.class_to_idx = {0: 0}
-            self.idx_to_class = {0: 0}
+            if self.external_class_to_idx is not None:
+                self.class_to_idx = dict(self.external_class_to_idx)
+                self.idx_to_class = {idx: cls for cls, idx in self.class_to_idx.items()}
+                self.num_classes = len(self.class_to_idx)
+            else:
+                self.num_classes = 1  # Будет переопределено при загрузке модели
+                self.class_to_idx = {0: 0}
+                self.idx_to_class = {0: 0}
         
         print(f"Количество классов: {self.num_classes}")
         print(f"Исходные классы: {self.classes}")
@@ -207,9 +226,12 @@ class LiDARDataset(Dataset):
         else:
             # Разбиваем на окна с 50% перекрытием:
             # это увеличивает число обучающих примеров.
-            step = self.num_points // 2  # 50% перекрытие
+            step = max(1, self.num_points // 2)  # 50% перекрытие
             num_clouds = (total_points - self.num_points) // step + 1
             starts = np.arange(num_clouds, dtype=np.int64) * step
+            last_start = total_points - self.num_points
+            if starts[-1] != last_start:
+                starts = np.append(starts, last_start)
             self.cloud_indices = (
                 starts[:, None] + np.arange(self.num_points, dtype=np.int64)[None, :]
             ).astype(np.int32)
@@ -226,7 +248,7 @@ class LiDARDataset(Dataset):
         Возвращает одно облако точек
         """
         if getattr(self, "chunked", False):
-            cloud_features, cloud_labels = self._load_chunk_item(idx)
+            cloud_features, cloud_labels, _cloud_indices = self._load_chunk_item(idx)
             features = cloud_features
             labels = cloud_labels
         else:
@@ -256,11 +278,18 @@ class LiDARDataset(Dataset):
         
         return features, labels
 
+    def get_cloud_point_indices(self, idx):
+        if getattr(self, "chunked", False):
+            cloud_indices = self._load_chunk_item(idx)[2]
+            return cloud_indices.astype(np.int64)
+        return self.cloud_indices[idx].astype(np.int64)
+
     def _get_cache_path(self, use_features):
         if not self.cache_dir:
             return None
 
         key = {
+            "cache_format": 2,
             "data_path": str(self.data_path.resolve()),
             "num_points": int(self.num_points),
             "use_features": use_features,
@@ -268,6 +297,7 @@ class LiDARDataset(Dataset):
             "task": self.task,
             "cache_chunked": bool(self.cache_chunked),
             "chunk_size": int(self.chunk_size),
+            "class_to_idx": self.external_class_to_idx,
         }
         key_json = json.dumps(key, sort_keys=True)
         digest = hashlib.md5(key_json.encode("utf-8")).hexdigest()
@@ -325,7 +355,7 @@ class LiDARDataset(Dataset):
             cloud_features = self.features[idx_slice]
             cloud_labels = self.labels[idx_slice]
             chunk_file = chunk_dir / f"chunk_{start:06d}_{end:06d}.npz"
-            np.savez(chunk_file, features=cloud_features, labels=cloud_labels)
+            np.savez(chunk_file, features=cloud_features, labels=cloud_labels, point_indices=idx_slice)
             chunk_files.append(chunk_file.name)
 
         metadata = {
@@ -369,12 +399,13 @@ class LiDARDataset(Dataset):
         if self._chunk_cache is None or self._chunk_cache_idx != chunk_idx:
             chunk_file = self.chunk_dir / self.chunk_files[chunk_idx]
             with np.load(chunk_file, allow_pickle=False) as data:
-                self._chunk_cache = (data["features"], data["labels"])
+                self._chunk_cache = (data["features"], data["labels"], data["point_indices"])
             self._chunk_cache_idx = chunk_idx
 
         cloud_features = self._chunk_cache[0][local_idx]
         cloud_labels = self._chunk_cache[1][local_idx]
-        return cloud_features, cloud_labels
+        cloud_indices = self._chunk_cache[2][local_idx]
+        return cloud_features, cloud_labels, cloud_indices
     
     def _augment_point_cloud(self, points):
         """
@@ -414,9 +445,11 @@ class LiDARDataset(Dataset):
         
         # Добавление шума
         if random.random() > 0.5:
-            noise = np.random.normal(0, 0.02, points.shape).astype(np.float32)
-            points = points + noise
-        
+            coord_indices = [self.use_features.index(axis) for axis in ["X", "Y", "Z"] if axis in self.use_features]
+            if coord_indices:
+                noise = np.random.normal(0, 0.02, (points.shape[0], len(coord_indices))).astype(np.float32)
+                points[:, coord_indices] = points[:, coord_indices] + noise
+
         return points.astype(np.float32)
 
     def _load_dataframe(self, data_path):

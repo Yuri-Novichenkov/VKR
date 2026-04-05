@@ -77,6 +77,9 @@ def build_model(
     task,
     num_classes,
     num_features,
+    k=20,
+    k_small=20,
+    k_large=40,
     attention_type="none",
     attention_k=16,
     attention_heads=4,
@@ -95,12 +98,18 @@ def build_model(
             else PointNetPlusPlusClassification(num_classes=num_classes, num_features=num_features)
         )
     if model_type == "dgcnn":
-        return DGCNNSegmentation(num_classes=num_classes, num_features=num_features) if task == "segmentation" else DGCNNClassification(num_classes=num_classes, num_features=num_features)
+        return (
+            DGCNNSegmentation(num_classes=num_classes, num_features=num_features, k=k)
+            if task == "segmentation"
+            else DGCNNClassification(num_classes=num_classes, num_features=num_features, k=k)
+        )
     if model_type == "ldgcnn":
         return (
             LDGCNNSegmentation(
                 num_classes=num_classes,
                 num_features=num_features,
+                k_small=k_small,
+                k_large=k_large,
                 attention_type=attention_type,
                 attention_k=attention_k,
                 attention_heads=attention_heads,
@@ -110,6 +119,8 @@ def build_model(
             else LDGCNNClassification(
                 num_classes=num_classes,
                 num_features=num_features,
+                k_small=k_small,
+                k_large=k_large,
                 attention_type=attention_type,
                 attention_k=attention_k,
                 attention_heads=attention_heads,
@@ -127,6 +138,25 @@ def resolve_test_path(args):
     return os.path.join(data_root, f"{args.dataset}_test.txt")
 
 
+def build_test_run_name(args, model_type, task, checkpoint):
+    if args.run_name:
+        return args.run_name
+
+    parts = [model_type, task, "test", args.dataset.lower()]
+    if model_type == "ldgcnn":
+        attention_type = checkpoint.get("attention_type", "none")
+        if attention_type != "none":
+            parts.append(f"attn-{attention_type}")
+    loss_type = checkpoint.get("loss_type", "ce")
+    if loss_type != "ce":
+        parts.append(loss_type)
+    class_balance = checkpoint.get("class_balance", "none")
+    if class_balance != "none":
+        parts.append(f"cb-{class_balance}")
+    parts.append(Path(args.checkpoint).stem)
+    return "__".join(parts)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Тестирование модели")
     parser.add_argument("--test_data", type=str, default=None, help="Путь к тестовому набору данных")
@@ -137,6 +167,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=8, help="Размер батча")
     parser.add_argument("--save_results", type=str, default=None, help="Путь для сохранения результатов")
     parser.add_argument("--experiment_name", type=str, default="PointCloudExperiments", help="MLflow experiment name")
+    parser.add_argument("--run_name", type=str, default=None, help="Имя запуска в MLflow")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"], help="Устройство для инференса")
     args = parser.parse_args()
 
@@ -157,15 +188,22 @@ def main():
     model_type = checkpoint.get("model_type", "pointnet")
     task = checkpoint.get("task", "segmentation")
     attention_type = checkpoint.get("attention_type", "none")
+    k = checkpoint.get("k", 20)
+    k_small = checkpoint.get("k_small", 20)
+    k_large = checkpoint.get("k_large", 40)
     attention_k = checkpoint.get("attention_k", 16)
     attention_heads = checkpoint.get("attention_heads", 4)
     attention_dropout = checkpoint.get("attention_dropout", 0.1)
+    class_to_idx = checkpoint.get("class_to_idx")
 
     model = build_model(
         model_type,
         task,
         num_classes,
         num_features,
+        k=k,
+        k_small=k_small,
+        k_large=k_large,
         attention_type=attention_type,
         attention_k=attention_k,
         attention_heads=attention_heads,
@@ -178,7 +216,14 @@ def main():
     test_path = resolve_test_path(args)
     print(f"Тестовые данные: {test_path}")
 
-    test_dataset = LiDARDataset(test_path, num_points=args.num_points, augment=False, has_labels=True, task=task)
+    test_dataset = LiDARDataset(
+        test_path,
+        num_points=args.num_points,
+        augment=False,
+        has_labels=True,
+        task=task,
+        class_to_idx=class_to_idx,
+    )
     test_dataset.num_classes = num_classes
     test_loader = DataLoader(
         test_dataset,
@@ -248,7 +293,8 @@ def main():
                 f.write(f"Points per sec: {total_points / inference_time:,.0f}\n")
 
     mlflow.set_experiment(args.experiment_name)
-    with mlflow.start_run(run_name=f"{model_type}_{task}_test"):
+    run_name = build_test_run_name(args, model_type, task, checkpoint)
+    with mlflow.start_run(run_name=run_name):
         mlflow.log_params(
             {
                 "model": model_type,
@@ -258,6 +304,7 @@ def main():
                 "attention_k": attention_k,
                 "attention_heads": attention_heads,
                 "attention_dropout": attention_dropout,
+                "run_name": run_name,
             }
         )
         mlflow.log_metric("test_accuracy", metrics["accuracy"])

@@ -174,6 +174,8 @@ python scripts/vizualization.py --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.
 - `--resume`: путь к чекпоинту для возобновления обучения (опционально)
 - `--model`: модель (`pointnet`, `pointnet++`, `dgcnn`, `ldgcnn`)
 - `--task`: задача (`segmentation` или `classification`)
+- `--experiment_name`: имя эксперимента в MLflow (по умолчанию `PointCloudExperiments`)
+- `--run_name`: имя запуска в MLflow (опционально; если не задано, формируется автоматически)
 - `--attention_type`: attention-режим для `ldgcnn` (`none`, `gatv2`, `local_window`)
 - `--attention_k`: размер локального окна attention
 - `--attention_heads`: число attention-heads
@@ -212,6 +214,52 @@ python scripts/train.py --resume checkpoints/last_checkpoint.pth
 Пример запуска:
 ```bash
 mlflow ui --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns
+```
+
+### Рекомендуемая схема именования экспериментов
+
+Чтобы в MLflow было проще анализировать результаты ВКР, рекомендуется делить запуски на смысловые серии:
+
+- `VKR_Baselines` — базовые модели (`pointnet`, `pointnet++`, `dgcnn`, `ldgcnn`)
+- `VKR_ClassBalance` — эксперименты с `--class_balance`
+- `VKR_LDGCNN_Attention` — attention-эксперименты `E1/E2/E3`
+- `VKR_Final` — финальные ("парадные") запуски для отчета
+- `VKR_Ablation` — абляции (например `no-attention`, `no-class-balance`, `k12-24`)
+
+### Формат `run_name`
+
+Для обучения (`scripts/train.py`) рекомендуется формат:
+
+`<model>__<task>__<dataset>__<variant>__pts<num_points>__bs<batch_size>__seed<seed>`
+
+Примеры:
+
+- `pointnet__segmentation__mar16__baseline__pts4096__bs8__seed42`
+- `pointnet++__segmentation__mar16__cb-effective__pts4096__bs4__seed42`
+- `ldgcnn__segmentation__mar16__attn-gatv2__pts2048__bs4__seed42`
+- `ldgcnn__segmentation__mar16__attn-local-window__cb-effective__pts2048__bs4__seed42`
+
+Для теста (`scripts/test.py`) рекомендуется формат:
+
+`<model>__<task>__test__<dataset>__<variant>__<checkpoint>`
+
+Примеры:
+
+- `pointnet__segmentation__test__mar16__baseline__best_model`
+- `ldgcnn__segmentation__test__mar16__attn-gatv2__best_model`
+
+### Варианты `variant`
+
+- `baseline` — базовый запуск без дополнительных методов
+- `cb-effective`, `cb-inverse` — балансировка классов
+- `attn-gatv2`, `attn-local-window` — attention-конфигурации
+- `focal`, `cb-focal` — варианты функции потерь
+- `no-attention`, `no-class-balance`, `k12-24` — абляции
+
+Пример команды:
+
+```bash
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --experiment_name VKR_LDGCNN_Attention --run_name "ldgcnn__segmentation__mar16__attn-gatv2__cb-effective__pts2048__bs4__seed42" --num_points 2048 --batch_size 4 --k_small 12 --k_large 24 --attention_type gatv2 --attention_k 16 --attention_heads 4 --attention_dropout 0.1 --class_balance effective --class_balance_beta 0.999 --seed 42
 ```
 
 ## Литература

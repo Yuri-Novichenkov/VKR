@@ -20,23 +20,38 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data import LiDARDataset
-from src.models import (
-    PointNetSegmentation,
-    PointNetPlusPlusSegmentation,
-    DGCNNSegmentation,
-    LDGCNNSegmentation,
-)
+from src.models import PointNetSegmentation, PointNetPlusPlusSegmentation, DGCNNSegmentation, LDGCNNSegmentation
 
 
-def build_model(model_type, num_classes, num_features):
+def build_model(
+    model_type,
+    num_classes,
+    num_features,
+    k=20,
+    k_small=20,
+    k_large=40,
+    attention_type="none",
+    attention_k=16,
+    attention_heads=4,
+    attention_dropout=0.1,
+):
     if model_type == "pointnet":
         return PointNetSegmentation(num_classes=num_classes, num_features=num_features)
     if model_type == "pointnet++":
         return PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
     if model_type == "dgcnn":
-        return DGCNNSegmentation(num_classes=num_classes, num_features=num_features)
+        return DGCNNSegmentation(num_classes=num_classes, num_features=num_features, k=k)
     if model_type == "ldgcnn":
-        return LDGCNNSegmentation(num_classes=num_classes, num_features=num_features)
+        return LDGCNNSegmentation(
+            num_classes=num_classes,
+            num_features=num_features,
+            k_small=k_small,
+            k_large=k_large,
+            attention_type=attention_type,
+            attention_k=attention_k,
+            attention_heads=attention_heads,
+            attention_dropout=attention_dropout,
+        )
     raise ValueError(f"Неизвестный тип модели: {model_type}")
 
 
@@ -110,10 +125,33 @@ def main():
     num_features = checkpoint["num_features"]
     model_type = checkpoint.get("model_type", "pointnet")
     task = checkpoint.get("task", "segmentation")
+    k = checkpoint.get("k", 20)
+    k_small = checkpoint.get("k_small", 20)
+    k_large = checkpoint.get("k_large", 40)
+    attention_type = checkpoint.get("attention_type", "none")
+    attention_k = checkpoint.get("attention_k", 16)
+    attention_heads = checkpoint.get("attention_heads", 4)
+    attention_dropout = checkpoint.get("attention_dropout", 0.1)
+    class_to_idx = checkpoint.get("class_to_idx")
+    idx_to_class = {
+        int(idx): int(cls)
+        for idx, cls in checkpoint.get("idx_to_class", {}).items()
+    }
     if task != "segmentation":
         raise ValueError("predictions.py поддерживает только task=segmentation")
 
-    model = build_model(model_type, num_classes, num_features)
+    model = build_model(
+        model_type,
+        num_classes,
+        num_features,
+        k=k,
+        k_small=k_small,
+        k_large=k_large,
+        attention_type=attention_type,
+        attention_k=attention_k,
+        attention_heads=attention_heads,
+        attention_dropout=attention_dropout,
+    )
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()
@@ -128,6 +166,7 @@ def main():
         cache_mode=args.cache_mode,
         cache_chunked=args.cache_chunked,
         chunk_size=args.chunk_size,
+        class_to_idx=class_to_idx,
     )
     dataset.num_classes = num_classes
 
@@ -139,8 +178,11 @@ def main():
         pin_memory=True if device.type == "cuda" else False,
     )
 
-    all_predictions = []
+    df = load_dataframe(args.data)
+    vote_counts = np.zeros((len(df), num_classes), dtype=np.int32)
+
     with torch.no_grad():
+        sample_offset = 0
         for features, _labels in loader:
             features = features.float().to(device)
             if model_type == "pointnet":
@@ -148,17 +190,26 @@ def main():
             else:
                 predictions = model(features)
             pred_classes = torch.argmax(predictions, dim=2)
-            all_predictions.append(pred_classes.cpu().numpy())
+            pred_classes_np = pred_classes.cpu().numpy()
 
-    # После batch-предсказаний разворачиваем в единый вектор.
-    all_predictions = np.concatenate(all_predictions, axis=0).reshape(-1)
+            batch_size = pred_classes_np.shape[0]
+            for batch_item_idx in range(batch_size):
+                cloud_indices = dataset.get_cloud_point_indices(sample_offset + batch_item_idx)
+                cloud_predictions = pred_classes_np[batch_item_idx]
+                np.add.at(vote_counts, (cloud_indices, cloud_predictions), 1)
+            sample_offset += batch_size
 
-    df = load_dataframe(args.data)
-    if len(all_predictions) > len(df):
-        all_predictions = all_predictions[: len(df)]
+    final_pred_indices = vote_counts.argmax(axis=1)
+    if idx_to_class:
+        final_predictions = np.array(
+            [idx_to_class.get(int(pred_idx), int(pred_idx)) for pred_idx in final_pred_indices],
+            dtype=np.int64,
+        )
+    else:
+        final_predictions = final_pred_indices.astype(np.int64)
 
     df = df.copy()
-    df["Predicted_Classification"] = all_predictions[: len(df)]
+    df["Predicted_Classification"] = final_predictions
 
     data_stem = Path(args.data).stem
     output_dir = Path(args.output_root) / model_type / data_stem
