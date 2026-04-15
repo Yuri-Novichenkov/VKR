@@ -1,0 +1,199 @@
+
+\documentclass[border=8pt, multi, tikz]{standalone} 
+\usepackage{import}
+\subimport{../../tools/PlotNeuralNet/layers/}{init}
+\usetikzlibrary{positioning}
+\usetikzlibrary{3d} %for including external image 
+
+\def\ConvColor{rgb:yellow,5;red,2.5;white,5}
+\def\ConvReluColor{rgb:yellow,5;red,5;white,5}
+\def\PoolColor{rgb:red,1;black,0.3}
+\def\UnpoolColor{rgb:blue,2;green,1;black,0.3}
+\def\FcColor{rgb:blue,5;red,2.5;white,5}
+\def\FcReluColor{rgb:blue,5;red,5;white,4}
+\def\SoftmaxColor{rgb:magenta,5;black,7}   
+\def\SumColor{rgb:blue,5;green,15}
+
+\newcommand{\copymidarrow}{\tikz \draw[-Stealth,line width=0.8mm,draw={rgb:blue,4;red,1;green,1;black,3}] (-0.3,0) -- ++(0.3,0);}
+
+\begin{document}
+\begin{tikzpicture}
+\tikzstyle{connection}=[ultra thick,every node/.style={sloped,allow upside down},draw=\edgecolor,opacity=0.7]
+\tikzstyle{copyconnection}=[ultra thick,every node/.style={sloped,allow upside down},draw={rgb:blue,4;red,1;green,1;black,3},opacity=0.7]
+
+\pic[shift={(0,0,0)}] at (0,0,0) 
+    {Box={
+        name=input,
+        caption=Input\\{\scriptsize 9x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=36,
+        width=1.8,
+        depth=36
+        }
+    };
+
+\pic[shift={ (2.8,0,0) }] at (input-east) 
+    {Box={
+        name=knn,
+        caption=kNN\\{\scriptsize k=20},
+        fill=\PoolColor,
+        opacity=0.5,
+        height=32,
+        width=1.2,
+        depth=32
+        }
+    };
+
+\draw [connection]  (input-east)    -- node {\midarrow} (knn-west);
+
+\pic[shift={(2.8,0,0)}] at (knn-east) 
+    {Box={
+        name=ec1,
+        caption=EC1\\{\scriptsize 64x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=30,
+        width=1.8,
+        depth=30
+        }
+    };
+
+\draw [connection]  (knn-east)    -- node {\midarrow} (ec1-west);
+
+\pic[shift={ (2.4,0,0) }] at (ec1-east) 
+    {Box={
+        name=knn2,
+        caption=DynkNN\\{\scriptsize k=20},
+        fill=\PoolColor,
+        opacity=0.5,
+        height=28,
+        width=1.0,
+        depth=28
+        }
+    };
+
+\draw [connection]  (ec1-east)    -- node {\midarrow} (knn2-west);
+
+\pic[shift={(2.4,0,0)}] at (knn2-east) 
+    {Box={
+        name=ec2,
+        caption=EC2\\{\scriptsize 64x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=28,
+        width=1.8,
+        depth=28
+        }
+    };
+
+\draw [connection]  (knn2-east)    -- node {\midarrow} (ec2-west);
+
+\pic[shift={ (2.4,0,0) }] at (ec2-east) 
+    {Box={
+        name=knn3,
+        caption=DynkNN\\{\scriptsize k=20},
+        fill=\PoolColor,
+        opacity=0.5,
+        height=26,
+        width=1.0,
+        depth=26
+        }
+    };
+
+\draw [connection]  (ec2-east)    -- node {\midarrow} (knn3-west);
+
+\pic[shift={(2.4,0,0)}] at (knn3-east) 
+    {Box={
+        name=ec3,
+        caption=EC3\\{\scriptsize 128x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=26,
+        width=1.8,
+        depth=26
+        }
+    };
+
+\draw [connection]  (knn3-east)    -- node {\midarrow} (ec3-west);
+
+\pic[shift={ (2.4,0,0) }] at (ec3-east) 
+    {Box={
+        name=knn4,
+        caption=DynkNN\\{\scriptsize k=20},
+        fill=\PoolColor,
+        opacity=0.5,
+        height=24,
+        width=1.0,
+        depth=24
+        }
+    };
+
+\draw [connection]  (ec3-east)    -- node {\midarrow} (knn4-west);
+
+\pic[shift={(2.4,0,0)}] at (knn4-east) 
+    {Box={
+        name=ec4,
+        caption=EC4\\{\scriptsize 256x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=24,
+        width=1.8,
+        depth=24
+        }
+    };
+
+\draw [connection]  (knn4-east)    -- node {\midarrow} (ec4-west);
+
+\pic[shift={(2.8,0,0)}] at (ec4-east) 
+    {Box={
+        name=cat,
+        caption=Concat\\{\scriptsize 512x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=22,
+        width=2.0,
+        depth=22
+        }
+    };
+
+\draw [connection]  (ec4-east)    -- node {\midarrow} (cat-west);
+
+\pic[shift={(2.8,0,0)}] at (cat-east) 
+    {Box={
+        name=mlp,
+        caption=MLP\\{\scriptsize 128x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=22,
+        width=1.9,
+        depth=22
+        }
+    };
+
+\draw [connection]  (cat-east)    -- node {\midarrow} (mlp-west);
+
+\pic[shift={(2.8,0,0)}] at (mlp-east) 
+    {Box={
+        name=head,
+        caption=Class\\{\scriptsize 11x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=24,
+        width=1.8,
+        depth=24
+        }
+    };
+
+\draw [connection]  (mlp-east)    -- node {\midarrow} (head-west);
+
+\end{tikzpicture}
+\end{document}

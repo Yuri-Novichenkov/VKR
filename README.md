@@ -24,6 +24,29 @@
 ```bash
 pip install -r requirements.txt
 ```
+
+### Установка PyTorch на GPU-сервере
+
+`torch` не зафиксирован в `requirements.txt`, потому что способ установки зависит от ОС, драйвера и CUDA-окружения сервера.
+
+Для Linux/GPU сначала установите обычные зависимости:
+
+```bash
+pip install -r requirements.txt
+```
+
+Затем отдельно установите PyTorch по официальной инструкции для вашей конфигурации CUDA:
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
+
+Если используется готовый GPU-образ Selectel, перед установкой PyTorch рекомендуется проверить:
+
+```bash
+nvidia-smi
+python -c "import torch; print(torch.cuda.is_available())"
+```
 ### Обучение модели
 С рекомендуемыми параметрами
 **PointNet (сегментация):**
@@ -261,6 +284,94 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlru
 ```bash
 python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --experiment_name VKR_LDGCNN_Attention --run_name "ldgcnn__segmentation__mar16__attn-gatv2__cb-effective__pts2048__bs4__seed42" --num_points 2048 --batch_size 4 --k_small 12 --k_large 24 --attention_type gatv2 --attention_k 16 --attention_heads 4 --attention_dropout 0.1 --class_balance effective --class_balance_beta 0.999 --seed 42
 ```
+
+## Схемы архитектур (torchviz + hiddenlayer)
+
+Для генерации схем добавлен скрипт `scripts/visualize_models.py`.
+
+Установка зависимостей:
+```bash
+py -3 -m pip install torchviz hiddenlayer matplotlib graphviz
+```
+
+Запуск (все модели, сегментация):
+```bash
+py -3 scripts/visualize_models.py --models all --task segmentation --num_points 1024 --num_features 9 --num_classes 8 --output_dir diagrams
+```
+
+Запуск (одна модель, классификация):
+```bash
+py -3 scripts/visualize_models.py --models ldgcnn --task classification --num_points 1024 --num_features 9 --num_classes 8 --output_dir diagrams --attention_type gatv2
+```
+
+Примечание: для PNG/SVG нужен установленный системный Graphviz (`dot` в `PATH`).
+Если `dot` не найден, скрипт все равно сохранит `.dot` файлы в `diagrams/`.
+
+## Sweep batch-size (YAML) + сравнительные графики
+
+Для автоматического сравнения нескольких `batch_size` добавлены скрипты:
+
+- `scripts/run_sweep.py` — запускает серию прогонов `train.py` по YAML-конфигу.
+- `scripts/plot_sweep_results.py` — строит графики из `runs_summary.csv`.
+
+Папки результатов создаются с timestamp и не перезаписываются:
+
+`experiments/batch_size/<timestamp>_<experiment>_<model>_<dataset>_<run_group>/`
+
+Внутри каждой sweep-папки:
+
+- `config_resolved.yaml` — сохранённый конфиг запуска
+- `runs_summary.csv` — сводная таблица по всем `batch_size`
+- `logs/` — логи каждого запуска
+- `metrics/` — JSON-метрики каждого запуска
+- `plots/` — сравнительные графики
+
+### Пример YAML-конфига
+
+Готовый пример:
+
+`configs/sweeps/ldgcnn_gatv2_batch_sweep.yaml`
+
+Также добавлены готовые конфиги:
+
+- `configs/sweeps/pointnet_batch_sweep.yaml`
+- `configs/sweeps/pointnetpp_batch_sweep.yaml`
+- `configs/sweeps/dgcnn_batch_sweep.yaml`
+- `configs/sweeps/ldgcnn_gatv2_batch_sweep.yaml`
+- `configs/sweeps/ldgcnn_localwin_batch_sweep.yaml`
+- `configs/sweeps/ldgcnn_none_batch_sweep.yaml`
+
+### Запуск sweep
+
+```bash
+python scripts/run_sweep.py --config configs/sweeps/ldgcnn_gatv2_batch_sweep.yaml --output_root experiments/batch_size
+```
+
+По умолчанию `run_sweep.py` после завершения автоматически строит графики в `plots/`.
+Отключить можно флагом `--no_auto_plot`.
+
+Если нужно явно указать интерпретатор для дочерних запусков:
+
+```bash
+python scripts/run_sweep.py --config configs/sweeps/ldgcnn_gatv2_batch_sweep.yaml --python_executable .venv/bin/python
+```
+
+### Построение графиков
+
+```bash
+python scripts/plot_sweep_results.py --summary_csv experiments/batch_size/<your_sweep_folder>/runs_summary.csv
+```
+
+### Что логируется для сравнения
+
+- `best_val_metric`
+- `final_val_miou` / `final_val_accuracy`
+- `mean_epoch_time_sec`
+- `total_train_time_sec`
+- `max_peak_vram_mb`
+- `samples_per_sec` и `points_per_sec` (вычисляются из числа объектов/точек за эпоху)
+
+VRAM берётся из PyTorch (`torch.cuda.max_memory_allocated`) и пишется по эпохам в MLflow/JSON.
 
 ## Литература
 

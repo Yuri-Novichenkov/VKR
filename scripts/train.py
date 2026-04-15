@@ -12,9 +12,12 @@
 """
 
 import argparse
+import json
 import os
 import random
 import sys
+import time
+from functools import partial
 from pathlib import Path
 
 import mlflow
@@ -130,78 +133,92 @@ def train_epoch(
         with autocast_context(use_amp):
             if task == "classification":
                 predictions = model(features)
-                ce_per_sample = F.cross_entropy(
-                    predictions,
-                    labels,
-                    weight=class_weights,
-                    reduction="none",
-                )
                 if loss_type == "ce":
-                    ce_loss = ce_per_sample.mean()
+                    loss, ce_loss, reg_loss = model.get_loss(
+                        predictions,
+                        labels,
+                        class_weights=class_weights,
+                    )
                 elif loss_type in ("focal", "cb_focal"):
+                    ce_per_sample = F.cross_entropy(
+                        predictions,
+                        labels,
+                        weight=class_weights,
+                        reduction="none",
+                    )
                     pt = torch.exp(-ce_per_sample)
                     ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                    loss = ce_loss
+                    reg_loss = torch.tensor(0.0, device=predictions.device)
                 else:
                     raise ValueError(f"Неизвестный loss_type: {loss_type}")
-                loss = ce_loss
-                reg_loss = torch.tensor(0.0, device=predictions.device)
                 pred_classes = torch.argmax(predictions, dim=1)
             else:
                 if model_type == "pointnet":
                     predictions, transform_coords, transform_features = model(features)
-                    bsz, n_points, n_classes = predictions.shape
-                    predictions_flat = predictions.reshape(-1, n_classes)
-                    labels_flat = labels.reshape(-1)
-                    ce_per_sample = F.cross_entropy(
-                        predictions_flat,
-                        labels_flat,
-                        weight=class_weights,
-                        reduction="none",
-                    )
                     if loss_type == "ce":
-                        ce_loss = ce_per_sample.mean()
+                        loss, ce_loss, reg_loss = model.get_loss(
+                            predictions,
+                            labels,
+                            transform_coords,
+                            transform_features,
+                            lambda_reg=lambda_reg,
+                            class_weights=class_weights,
+                        )
                     elif loss_type in ("focal", "cb_focal"):
+                        bsz, n_points, n_classes = predictions.shape
+                        predictions_flat = predictions.reshape(-1, n_classes)
+                        labels_flat = labels.reshape(-1)
+                        ce_per_sample = F.cross_entropy(
+                            predictions_flat,
+                            labels_flat,
+                            weight=class_weights,
+                            reduction="none",
+                        )
                         pt = torch.exp(-ce_per_sample)
                         ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                        identity_3 = torch.eye(3, device=transform_coords.device).unsqueeze(0)
+                        reg_coords = torch.mean(
+                            torch.norm(
+                                torch.bmm(transform_coords, transform_coords.transpose(2, 1)) - identity_3,
+                                dim=(1, 2),
+                            )
+                        )
+                        identity_64 = torch.eye(64, device=transform_features.device).unsqueeze(0)
+                        reg_features = torch.mean(
+                            torch.norm(
+                                torch.bmm(transform_features, transform_features.transpose(2, 1)) - identity_64,
+                                dim=(1, 2),
+                            )
+                        )
+                        reg_loss = reg_coords + reg_features
+                        loss = ce_loss + lambda_reg * reg_loss
                     else:
                         raise ValueError(f"Неизвестный loss_type: {loss_type}")
-
-                    identity_3 = torch.eye(3, device=transform_coords.device).unsqueeze(0)
-                    reg_coords = torch.mean(
-                        torch.norm(
-                            torch.bmm(transform_coords, transform_coords.transpose(2, 1)) - identity_3,
-                            dim=(1, 2),
-                        )
-                    )
-                    identity_64 = torch.eye(64, device=transform_features.device).unsqueeze(0)
-                    reg_features = torch.mean(
-                        torch.norm(
-                            torch.bmm(transform_features, transform_features.transpose(2, 1)) - identity_64,
-                            dim=(1, 2),
-                        )
-                    )
-                    reg_loss = reg_coords + reg_features
-                    loss = ce_loss + lambda_reg * reg_loss
                 else:
                     predictions = model(features)
-                    bsz, n_points, n_classes = predictions.shape
-                    predictions_flat = predictions.reshape(-1, n_classes)
-                    labels_flat = labels.reshape(-1)
-                    ce_per_sample = F.cross_entropy(
-                        predictions_flat,
-                        labels_flat,
-                        weight=class_weights,
-                        reduction="none",
-                    )
                     if loss_type == "ce":
-                        ce_loss = ce_per_sample.mean()
+                        loss, ce_loss, reg_loss = model.get_loss(
+                            predictions,
+                            labels,
+                            class_weights=class_weights,
+                        )
                     elif loss_type in ("focal", "cb_focal"):
+                        bsz, n_points, n_classes = predictions.shape
+                        predictions_flat = predictions.reshape(-1, n_classes)
+                        labels_flat = labels.reshape(-1)
+                        ce_per_sample = F.cross_entropy(
+                            predictions_flat,
+                            labels_flat,
+                            weight=class_weights,
+                            reduction="none",
+                        )
                         pt = torch.exp(-ce_per_sample)
                         ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                        loss = ce_loss
+                        reg_loss = torch.tensor(0.0, device=predictions.device)
                     else:
                         raise ValueError(f"Неизвестный loss_type: {loss_type}")
-                    loss = ce_loss
-                    reg_loss = torch.tensor(0.0, device=predictions.device)
                 pred_classes = torch.argmax(predictions, dim=2)
 
         optimizer.zero_grad()
@@ -258,78 +275,92 @@ def validate(
             with autocast_context(use_amp):
                 if task == "classification":
                     predictions = model(features)
-                    ce_per_sample = F.cross_entropy(
-                        predictions,
-                        labels,
-                        weight=class_weights,
-                        reduction="none",
-                    )
                     if loss_type == "ce":
-                        ce_loss = ce_per_sample.mean()
+                        loss, ce_loss, reg_loss = model.get_loss(
+                            predictions,
+                            labels,
+                            class_weights=class_weights,
+                        )
                     elif loss_type in ("focal", "cb_focal"):
+                        ce_per_sample = F.cross_entropy(
+                            predictions,
+                            labels,
+                            weight=class_weights,
+                            reduction="none",
+                        )
                         pt = torch.exp(-ce_per_sample)
                         ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                        loss = ce_loss
+                        reg_loss = torch.tensor(0.0, device=predictions.device)
                     else:
                         raise ValueError(f"Неизвестный loss_type: {loss_type}")
-                    loss = ce_loss
-                    reg_loss = torch.tensor(0.0, device=predictions.device)
                     pred_classes = torch.argmax(predictions, dim=1)
                 else:
                     if model_type == "pointnet":
                         predictions, transform_coords, transform_features = model(features)
-                        bsz, n_points, n_classes = predictions.shape
-                        predictions_flat = predictions.reshape(-1, n_classes)
-                        labels_flat = labels.reshape(-1)
-                        ce_per_sample = F.cross_entropy(
-                            predictions_flat,
-                            labels_flat,
-                            weight=class_weights,
-                            reduction="none",
-                        )
                         if loss_type == "ce":
-                            ce_loss = ce_per_sample.mean()
+                            loss, ce_loss, reg_loss = model.get_loss(
+                                predictions,
+                                labels,
+                                transform_coords,
+                                transform_features,
+                                lambda_reg=lambda_reg,
+                                class_weights=class_weights,
+                            )
                         elif loss_type in ("focal", "cb_focal"):
+                            bsz, n_points, n_classes = predictions.shape
+                            predictions_flat = predictions.reshape(-1, n_classes)
+                            labels_flat = labels.reshape(-1)
+                            ce_per_sample = F.cross_entropy(
+                                predictions_flat,
+                                labels_flat,
+                                weight=class_weights,
+                                reduction="none",
+                            )
                             pt = torch.exp(-ce_per_sample)
                             ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                            identity_3 = torch.eye(3, device=transform_coords.device).unsqueeze(0)
+                            reg_coords = torch.mean(
+                                torch.norm(
+                                    torch.bmm(transform_coords, transform_coords.transpose(2, 1)) - identity_3,
+                                    dim=(1, 2),
+                                )
+                            )
+                            identity_64 = torch.eye(64, device=transform_features.device).unsqueeze(0)
+                            reg_features = torch.mean(
+                                torch.norm(
+                                    torch.bmm(transform_features, transform_features.transpose(2, 1)) - identity_64,
+                                    dim=(1, 2),
+                                )
+                            )
+                            reg_loss = reg_coords + reg_features
+                            loss = ce_loss + lambda_reg * reg_loss
                         else:
                             raise ValueError(f"Неизвестный loss_type: {loss_type}")
-
-                        identity_3 = torch.eye(3, device=transform_coords.device).unsqueeze(0)
-                        reg_coords = torch.mean(
-                            torch.norm(
-                                torch.bmm(transform_coords, transform_coords.transpose(2, 1)) - identity_3,
-                                dim=(1, 2),
-                            )
-                        )
-                        identity_64 = torch.eye(64, device=transform_features.device).unsqueeze(0)
-                        reg_features = torch.mean(
-                            torch.norm(
-                                torch.bmm(transform_features, transform_features.transpose(2, 1)) - identity_64,
-                                dim=(1, 2),
-                            )
-                        )
-                        reg_loss = reg_coords + reg_features
-                        loss = ce_loss + lambda_reg * reg_loss
                     else:
                         predictions = model(features)
-                        bsz, n_points, n_classes = predictions.shape
-                        predictions_flat = predictions.reshape(-1, n_classes)
-                        labels_flat = labels.reshape(-1)
-                        ce_per_sample = F.cross_entropy(
-                            predictions_flat,
-                            labels_flat,
-                            weight=class_weights,
-                            reduction="none",
-                        )
                         if loss_type == "ce":
-                            ce_loss = ce_per_sample.mean()
+                            loss, ce_loss, reg_loss = model.get_loss(
+                                predictions,
+                                labels,
+                                class_weights=class_weights,
+                            )
                         elif loss_type in ("focal", "cb_focal"):
+                            bsz, n_points, n_classes = predictions.shape
+                            predictions_flat = predictions.reshape(-1, n_classes)
+                            labels_flat = labels.reshape(-1)
+                            ce_per_sample = F.cross_entropy(
+                                predictions_flat,
+                                labels_flat,
+                                weight=class_weights,
+                                reduction="none",
+                            )
                             pt = torch.exp(-ce_per_sample)
                             ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
+                            loss = ce_loss
+                            reg_loss = torch.tensor(0.0, device=predictions.device)
                         else:
                             raise ValueError(f"Неизвестный loss_type: {loss_type}")
-                        loss = ce_loss
-                        reg_loss = torch.tensor(0.0, device=predictions.device)
                     pred_classes = torch.argmax(predictions, dim=2)
 
             total_loss += loss.item()
@@ -417,9 +448,10 @@ def build_model(
     raise ValueError(f"Неизвестная модель: {model_type}")
 
 
-def set_seed(seed):
+def set_seed(seed, deterministic=False):
     """
-    Фиксирует источники случайности для воспроизводимых запусков.
+    Фиксирует источники случайности.
+    deterministic=True включает более строгую воспроизводимость ценой скорости.
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -427,28 +459,35 @@ def set_seed(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-    # Для воспроизводимости отключаем недетерминированные fast-path режимы.
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-    try:
-        torch.use_deterministic_algorithms(True, warn_only=True)
-    except TypeError:
-        # Для совместимости со старыми версиями PyTorch без warn_only.
-        torch.use_deterministic_algorithms(True)
+    if deterministic:
+        # Для воспроизводимости отключаем недетерминированные fast-path режимы.
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except TypeError:
+            # Для совместимости со старыми версиями PyTorch без warn_only.
+            torch.use_deterministic_algorithms(True)
+    else:
+        # Возвращаем быстрые backend-оптимизации. На GPU это обычно заметно
+        # ускоряет обучение по сравнению со строгим детерминизмом.
+        torch.backends.cudnn.deterministic = False
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+        try:
+            torch.use_deterministic_algorithms(False)
+        except TypeError:
+            pass
 
 
-def make_worker_init_fn(base_seed):
+def seed_worker_with_base(worker_id: int, base_seed: int):
     """
-    Инициализирует RNG каждого DataLoader worker своим seed.
+    Инициализирует RNG DataLoader worker детерминированным seed.
     """
-
-    def seed_worker(worker_id):
-        worker_seed = base_seed + worker_id
-        random.seed(worker_seed)
-        np.random.seed(worker_seed)
-        torch.manual_seed(worker_seed)
-
-    return seed_worker
+    worker_seed = base_seed + worker_id
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
 
 
 def compute_class_weights(train_dataset, num_classes, task="segmentation", mode="none", beta=0.999):
@@ -556,6 +595,17 @@ def main():
     parser.add_argument("--cache_only", action="store_true", help="Только подготовить кэш и выйти")
     parser.add_argument("--allow_windows_workers", action="store_true", help="Разрешить num_workers>0 на Windows")
     parser.add_argument("--seed", type=int, default=42, help="Seed для воспроизводимости")
+    parser.add_argument(
+        "--metrics_json_path",
+        type=str,
+        default=None,
+        help="Опциональный путь для сохранения подробных метрик запуска в JSON",
+    )
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Включить строгую воспроизводимость (обычно медленнее на GPU)",
+    )
 
     args = parser.parse_args()
     if args.loss_type == "cb_focal" and args.class_balance == "none":
@@ -563,8 +613,9 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}")
-    set_seed(args.seed)
+    set_seed(args.seed, deterministic=args.deterministic)
     print(f"Seed: {args.seed}")
+    print(f"Deterministic mode: {args.deterministic}")
 
     if os.name == "nt" and args.num_workers > 0 and not args.allow_windows_workers:
         print("Windows: num_workers>0 может приводить к ошибкам. Устанавливаю num_workers=0.")
@@ -648,7 +699,7 @@ def main():
     }
     loader_generator = torch.Generator()
     loader_generator.manual_seed(args.seed)
-    train_loader_kwargs["worker_init_fn"] = make_worker_init_fn(args.seed)
+    train_loader_kwargs["worker_init_fn"] = partial(seed_worker_with_base, base_seed=args.seed)
     train_loader_kwargs["generator"] = loader_generator
     if args.num_workers > 0:
         train_loader_kwargs["prefetch_factor"] = args.prefetch_factor
@@ -667,7 +718,7 @@ def main():
         "pin_memory": True if torch.cuda.is_available() else False,
         "drop_last": False,
     }
-    val_loader_kwargs["worker_init_fn"] = make_worker_init_fn(args.seed + 10_000)
+    val_loader_kwargs["worker_init_fn"] = partial(seed_worker_with_base, base_seed=args.seed + 10_000)
     val_loader_kwargs["generator"] = loader_generator
     if args.num_workers > 0:
         val_loader_kwargs["prefetch_factor"] = args.prefetch_factor
@@ -749,6 +800,7 @@ def main():
                 "num_classes": num_classes,
                 "num_workers": args.num_workers,
                 "seed": args.seed,
+                "deterministic": args.deterministic,
                 "amp": use_amp,
                 "k": args.k,
                 "k_small": args.k_small,
@@ -772,9 +824,14 @@ def main():
         )
 
         print("Начало обучения")
+        epoch_stats = []
+        train_start_ts = time.perf_counter()
         for epoch in range(start_epoch, args.epochs):
             print(f"\nЭпоха {epoch + 1}/{args.epochs}")
             print("-" * 50)
+            epoch_start_ts = time.perf_counter()
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
 
             train_metrics = train_epoch(
                 model,
@@ -805,6 +862,12 @@ def main():
                 lambda_reg=args.lambda_reg,
             )
             scheduler.step()
+            epoch_time_sec = float(time.perf_counter() - epoch_start_ts)
+            peak_vram_mb = (
+                float(torch.cuda.max_memory_allocated() / (1024 ** 2))
+                if torch.cuda.is_available()
+                else 0.0
+            )
 
             print(
                 f"\nTrain - Loss: {train_metrics['loss']:.4f}, "
@@ -816,6 +879,7 @@ def main():
                 f"Accuracy: {val_metrics['accuracy']:.4f}"
                 + (f", mIoU: {val_metrics['mean_iou']:.4f}" if args.task == "segmentation" else "")
             )
+            print(f"Epoch time: {epoch_time_sec:.2f}s | Peak VRAM: {peak_vram_mb:.1f} MB")
 
             # MLflow metrics
             mlflow.log_metric("train_loss", train_metrics["loss"], step=epoch)
@@ -825,6 +889,22 @@ def main():
             if args.task == "segmentation":
                 mlflow.log_metric("train_miou", train_metrics["mean_iou"], step=epoch)
                 mlflow.log_metric("val_miou", val_metrics["mean_iou"], step=epoch)
+            mlflow.log_metric("epoch_time_sec", epoch_time_sec, step=epoch)
+            mlflow.log_metric("peak_vram_mb", peak_vram_mb, step=epoch)
+
+            epoch_row = {
+                "epoch": epoch + 1,
+                "train_loss": float(train_metrics["loss"]),
+                "val_loss": float(val_metrics["loss"]),
+                "train_accuracy": float(train_metrics["accuracy"]),
+                "val_accuracy": float(val_metrics["accuracy"]),
+                "epoch_time_sec": epoch_time_sec,
+                "peak_vram_mb": peak_vram_mb,
+            }
+            if args.task == "segmentation":
+                epoch_row["train_miou"] = float(train_metrics["mean_iou"])
+                epoch_row["val_miou"] = float(val_metrics["mean_iou"])
+            epoch_stats.append(epoch_row)
 
             # Сохраняем лучшую модель по целевой метрике:
             # mIoU для segmentation, accuracy для classification.
@@ -891,6 +971,61 @@ def main():
             }
             last_path = os.path.join(args.save_dir, "last_checkpoint.pth")
             torch.save(checkpoint, last_path)
+
+        if args.metrics_json_path:
+            metrics_path = Path(args.metrics_json_path)
+            metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            total_train_time_sec = float(time.perf_counter() - train_start_ts)
+            train_dataset_size = int(len(train_loader.dataset))
+            train_items_per_epoch = int(len(train_loader) * args.batch_size)
+            effective_drop_ratio = (
+                float(max(0, train_dataset_size - train_items_per_epoch) / train_dataset_size)
+                if train_dataset_size > 0
+                else 0.0
+            )
+            best_epoch = 0
+            if epoch_stats:
+                if args.task == "segmentation":
+                    best_epoch = max(epoch_stats, key=lambda r: r["val_miou"])["epoch"]
+                else:
+                    best_epoch = max(epoch_stats, key=lambda r: r["val_accuracy"])["epoch"]
+            payload = {
+                "run_name": run_name,
+                "model": args.model,
+                "task": args.task,
+                "dataset": args.dataset,
+                "epochs": args.epochs,
+                "batch_size": args.batch_size,
+                "num_points": args.num_points,
+                "amp": use_amp,
+                "seed": args.seed,
+                "num_workers": args.num_workers,
+                "train_drop_last": bool(getattr(train_loader, "drop_last", False)),
+                "train_dataset_size": train_dataset_size,
+                "train_items_per_epoch": train_items_per_epoch,
+                "train_steps_per_epoch": int(len(train_loader)),
+                "effective_drop_ratio": effective_drop_ratio,
+                "total_train_time_sec": total_train_time_sec,
+                "best_val_metric": float(best_val_iou),
+                "best_epoch": int(best_epoch),
+                "max_peak_vram_mb": float(max((r["peak_vram_mb"] for r in epoch_stats), default=0.0)),
+                "mean_epoch_time_sec": float(np.mean([r["epoch_time_sec"] for r in epoch_stats])) if epoch_stats else 0.0,
+                "final_train_loss": float(epoch_stats[-1]["train_loss"]) if epoch_stats else None,
+                "final_val_loss": float(epoch_stats[-1]["val_loss"]) if epoch_stats else None,
+                "final_train_accuracy": float(epoch_stats[-1]["train_accuracy"]) if epoch_stats else None,
+                "final_val_accuracy": float(epoch_stats[-1]["val_accuracy"]) if epoch_stats else None,
+                "epoch_stats": epoch_stats,
+            }
+            if args.task == "segmentation":
+                payload["best_val_miou"] = float(best_val_iou)
+                payload["final_train_miou"] = float(epoch_stats[-1]["train_miou"]) if epoch_stats else None
+                payload["final_val_miou"] = float(epoch_stats[-1]["val_miou"]) if epoch_stats else None
+            else:
+                payload["best_val_accuracy"] = float(best_val_iou)
+
+            with metrics_path.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            print(f"Сохранены метрики запуска: {metrics_path}")
 
 
 if __name__ == "__main__":

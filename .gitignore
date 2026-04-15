@@ -80,6 +80,20 @@ mlflow.db
 *.temp
 .cache/
 cache/
+tmp_*.zip
+tmp_*/
+tmp_eval_*.json
+
+# Эксперименты и автоматически сгенерированные артефакты
+experiments/
+diagrams/netron/
+diagrams/torchviz/
+diagrams/hiddenlayer/
+diagrams/plotneuralnet/*.aux
+diagrams/plotneuralnet/*.log
+
+# Вложенные внешние инструменты
+tools/PlotNeuralNet/.git/
 
 # OS
 Thumbs.db

@@ -16,6 +16,7 @@ import mlflow
 import torch
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 from torch.utils.data import DataLoader
+from torch import amp
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -130,6 +131,28 @@ def build_model(
     raise ValueError(f"Неизвестная модель: {model_type}")
 
 
+def autocast_context(use_amp):
+    if not use_amp:
+        return torch.no_grad()
+
+    class _AutocastNoGradContext:
+        def __enter__(self):
+            self._no_grad = torch.no_grad()
+            self._no_grad.__enter__()
+            try:
+                self._autocast = amp.autocast(device_type="cuda", enabled=True)
+            except TypeError:
+                self._autocast = amp.autocast(enabled=True)
+            return self._autocast.__enter__()
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            autocast_result = self._autocast.__exit__(exc_type, exc_val, exc_tb)
+            no_grad_result = self._no_grad.__exit__(exc_type, exc_val, exc_tb)
+            return autocast_result or no_grad_result
+
+    return _AutocastNoGradContext()
+
+
 def resolve_test_path(args):
     if args.test_data:
         return args.test_data
@@ -169,6 +192,7 @@ def main():
     parser.add_argument("--experiment_name", type=str, default="PointCloudExperiments", help="MLflow experiment name")
     parser.add_argument("--run_name", type=str, default=None, help="Имя запуска в MLflow")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"], help="Устройство для инференса")
+    parser.add_argument("--amp", action="store_true", help="Включить mixed precision (AMP) на GPU")
     args = parser.parse_args()
 
     if args.device == "cpu":
@@ -180,6 +204,9 @@ def main():
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Использование устройства: {device}")
+    use_amp = bool(args.amp and device.type == "cuda")
+    if args.amp and device.type != "cuda":
+        print("AMP запрошен, но CUDA недоступна. Выполняю инференс без AMP.")
 
     # Из checkpoint берем не только веса, но и метаданные (task/model/num_classes).
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
@@ -238,7 +265,7 @@ def main():
     total_points = 0
     total_batches = 0
     inference_start = time.perf_counter()
-    with torch.no_grad():
+    with autocast_context(use_amp):
         for features, labels in test_loader:
             features = features.float().to(device)
             labels = labels.long().to(device)
@@ -304,6 +331,7 @@ def main():
                 "attention_k": attention_k,
                 "attention_heads": attention_heads,
                 "attention_dropout": attention_dropout,
+                "amp": use_amp,
                 "run_name": run_name,
             }
         )

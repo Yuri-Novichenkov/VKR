@@ -1,0 +1,23 @@
+experiment_name: VKR_BatchSweep
+run_group: pointnetpp_mar16
+model: pointnet++
+task: segmentation
+dataset: Mar16
+batch_sizes: [4, 8, 16, 32, 64, 128]
+
+common_args:
+  epochs: 10
+  num_points: 4096
+  lr: 0.0005
+  amp: true
+  seed: 42
+  deterministic: false
+  cache_dir: cache
+  cache_mode: read
+  cache_chunked: true
+  chunk_size: 512
+  num_workers: 0
+  class_balance: effective
+  class_balance_beta: 0.999
+
+train_args: {}

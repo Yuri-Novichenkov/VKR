@@ -1,0 +1,31 @@
+experiment_name: VKR_BatchSweep
+run_group: ldgcnn_e1_gatv2_mar16
+model: ldgcnn
+task: segmentation
+dataset: Mar16
+batch_sizes: [2 ,4, 6, 8]
+
+# Аргументы, общие для всех запусков в sweep.
+common_args:
+  epochs: 10
+  num_points: 2048
+  lr: 0.0008
+  amp: true
+  seed: 42
+  deterministic: false
+  cache_dir: cache
+  cache_mode: read
+  cache_chunked: true
+  chunk_size: 512
+  num_workers: 0
+  class_balance: effective
+  class_balance_beta: 0.999
+  k_small: 20
+  k_large: 40
+  attention_type: gatv2
+  attention_k: 16
+  attention_heads: 4
+  attention_dropout: 0.1
+
+# Можно переопределять/добавлять флаги train.py отдельно.
+train_args: {}

@@ -1,0 +1,90 @@
+<mxfile host="app.diagrams.net" version="24.7.17" compressed="false">
+  <diagram id="pointnet-diagram" name="PointNet">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="title" value="&lt;font style=&quot;font-size:28px;&quot;&gt;&lt;b&gt;PointNet: схема архитектуры для семантической сегментации&lt;/b&gt;&lt;/font&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="1100" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="subtitle" value="Блок-схема высокого уровня: выравнивание, извлечение признаков, глобальная агрегация и покомпонентная классификация" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=16;fontColor=#4b647d;" vertex="1" parent="1">
+          <mxGeometry x="40" y="75" width="1300" height="30" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="input" value="&lt;b&gt;Входное облако точек&lt;/b&gt;&lt;br&gt;N x F признаков&lt;br&gt;&lt;font style=&quot;font-size:12px;&quot;&gt;XYZ, RGB, Intensity, Returns&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcecff;strokeColor=#8fb6e8;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="40" y="170" width="190" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="tnet1" value="&lt;b&gt;T-Net (3x3)&lt;/b&gt;&lt;br&gt;Выравнивание&lt;br&gt;&lt;font style=&quot;font-size:12px;&quot;&gt;геометрии по координатам&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcecff;strokeColor=#8fb6e8;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="290" y="170" width="190" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="mlp1" value="&lt;b&gt;MLP&lt;/b&gt;&lt;br&gt;64 -&gt; 64&lt;br&gt;&lt;font style=&quot;font-size:12px;&quot;&gt;Локальные признаки&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcecff;strokeColor=#8fb6e8;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="540" y="170" width="190" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="tnet2" value="&lt;b&gt;Feature T-Net&lt;/b&gt;&lt;br&gt;64 x 64&lt;br&gt;&lt;font style=&quot;font-size:12px;&quot;&gt;Выравнивание признаков&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcecff;strokeColor=#8fb6e8;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="790" y="170" width="190" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="mlp2" value="&lt;b&gt;MLP&lt;/b&gt;&lt;br&gt;64 -&gt; 128 -&gt; 1024&lt;br&gt;&lt;font style=&quot;font-size:12px;&quot;&gt;Глобальный дескриптор&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcecff;strokeColor=#8fb6e8;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="170" width="230" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="pool" value="&lt;b&gt;Global Max Pooling&lt;/b&gt;&lt;br&gt;Агрегация признаков&lt;br&gt;&lt;font style=&quot;font-size:12px;&quot;&gt;единый вектор облака&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dff4e5;strokeColor=#8dc9a0;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="360" width="230" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="concat" value="&lt;b&gt;Конкатенация признаков&lt;/b&gt;&lt;br&gt;Локальный контекст + глобальный вектор&lt;br&gt;&lt;font style=&quot;font-size:12px;&quot;&gt;признаки для каждой точки&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff1d9;strokeColor=#e3b56b;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="610" y="570" width="350" height="110" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="head" value="&lt;b&gt;Point-wise MLP&lt;/b&gt;&lt;br&gt;Классификация каждой точки" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff1d9;strokeColor=#e3b56b;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="610" y="730" width="350" height="90" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="output" value="&lt;b&gt;Выход&lt;/b&gt;&lt;br&gt;N x C&lt;br&gt;&lt;font style=&quot;font-size:12px;&quot;&gt;класс для каждой точки&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0de;strokeColor=#df8d86;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="730" width="220" height="90" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" style="endArrow=block;endFill=1;strokeWidth=3;strokeColor=#58728d;" edge="1" parent="1" source="input" target="tnet1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" style="endArrow=block;endFill=1;strokeWidth=3;strokeColor=#58728d;" edge="1" parent="1" source="tnet1" target="mlp1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" style="endArrow=block;endFill=1;strokeWidth=3;strokeColor=#58728d;" edge="1" parent="1" source="mlp1" target="tnet2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" style="endArrow=block;endFill=1;strokeWidth=3;strokeColor=#58728d;" edge="1" parent="1" source="tnet2" target="mlp2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" style="endArrow=block;endFill=1;strokeWidth=3;strokeColor=#58728d;" edge="1" parent="1" source="mlp2" target="pool">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" style="endArrow=block;endFill=1;strokeWidth=3;strokeColor=#58728d;rounded=1;" edge="1" parent="1" source="mlp1" target="concat">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="635" y="420"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" style="endArrow=block;endFill=1;strokeWidth=3;strokeColor=#58728d;rounded=1;" edge="1" parent="1" source="pool" target="concat">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1155" y="520"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" style="endArrow=block;endFill=1;strokeWidth=3;strokeColor=#58728d;" edge="1" parent="1" source="concat" target="head">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" style="endArrow=block;endFill=1;strokeWidth=3;strokeColor=#58728d;" edge="1" parent="1" source="head" target="output">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

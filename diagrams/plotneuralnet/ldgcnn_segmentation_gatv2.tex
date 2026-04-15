@@ -1,0 +1,157 @@
+
+\documentclass[border=8pt, multi, tikz]{standalone} 
+\usepackage{import}
+\subimport{../../tools/PlotNeuralNet/layers/}{init}
+\usetikzlibrary{positioning}
+\usetikzlibrary{3d} %for including external image 
+
+\def\ConvColor{rgb:yellow,5;red,2.5;white,5}
+\def\ConvReluColor{rgb:yellow,5;red,5;white,5}
+\def\PoolColor{rgb:red,1;black,0.3}
+\def\UnpoolColor{rgb:blue,2;green,1;black,0.3}
+\def\FcColor{rgb:blue,5;red,2.5;white,5}
+\def\FcReluColor{rgb:blue,5;red,5;white,4}
+\def\SoftmaxColor{rgb:magenta,5;black,7}   
+\def\SumColor{rgb:blue,5;green,15}
+
+\newcommand{\copymidarrow}{\tikz \draw[-Stealth,line width=0.8mm,draw={rgb:blue,4;red,1;green,1;black,3}] (-0.3,0) -- ++(0.3,0);}
+
+\begin{document}
+\begin{tikzpicture}
+\tikzstyle{connection}=[ultra thick,every node/.style={sloped,allow upside down},draw=\edgecolor,opacity=0.7]
+\tikzstyle{copyconnection}=[ultra thick,every node/.style={sloped,allow upside down},draw={rgb:blue,4;red,1;green,1;black,3},opacity=0.7]
+
+\pic[shift={(0,0,0)}] at (0,0,0) 
+    {Box={
+        name=input,
+        caption=Input\\{\scriptsize 9x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=36,
+        width=1.8,
+        depth=36
+        }
+    };
+
+\pic[shift={(2.8,0,0)}] at (input-east) 
+    {Box={
+        name=msec1,
+        caption=MSEC1\\{\scriptsize 64x2048}\\{\scriptsize ks/kl=20/40},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=32,
+        width=1.8,
+        depth=32
+        }
+    };
+
+\draw [connection]  (input-east)    -- node {\midarrow} (msec1-west);
+
+\pic[shift={(2.8,0,0)}] at (msec1-east) 
+    {Box={
+        name=msec2,
+        caption=MSEC2\\{\scriptsize 64x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=30,
+        width=1.8,
+        depth=30
+        }
+    };
+
+\draw [connection]  (msec1-east)    -- node {\midarrow} (msec2-west);
+
+\pic[shift={ (2.8,0,0) }] at (msec2-east) 
+    {Box={
+        name=attn,
+        caption=GATv2\\{\scriptsize 64x2048},
+        fill=\PoolColor,
+        opacity=0.5,
+        height=26,
+        width=1.2,
+        depth=26
+        }
+    };
+
+\draw [connection]  (msec2-east)    -- node {\midarrow} (attn-west);
+
+\pic[shift={(2.8,0,0)}] at (attn-east) 
+    {Box={
+        name=msec3,
+        caption=MSEC3\\{\scriptsize 128x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=26,
+        width=1.8,
+        depth=26
+        }
+    };
+
+\draw [connection]  (attn-east)    -- node {\midarrow} (msec3-west);
+
+\pic[shift={(2.8,0,0)}] at (msec3-east) 
+    {Box={
+        name=msec4,
+        caption=MSEC4\\{\scriptsize 256x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=24,
+        width=1.8,
+        depth=24
+        }
+    };
+
+\draw [connection]  (msec3-east)    -- node {\midarrow} (msec4-west);
+
+\pic[shift={(2.8,0,0)}] at (msec4-east) 
+    {Box={
+        name=cat,
+        caption=Concat\\{\scriptsize 512x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=22,
+        width=2.0,
+        depth=22
+        }
+    };
+
+\draw [connection]  (msec4-east)    -- node {\midarrow} (cat-west);
+
+\pic[shift={(2.8,0,0)}] at (cat-east) 
+    {Box={
+        name=mlp,
+        caption=MLP\\{\scriptsize 128x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=22,
+        width=1.9,
+        depth=22
+        }
+    };
+
+\draw [connection]  (cat-east)    -- node {\midarrow} (mlp-west);
+
+\pic[shift={(2.8,0,0)}] at (mlp-east) 
+    {Box={
+        name=head,
+        caption=Class\\{\scriptsize 11x2048},
+        xlabel={{, }},
+        zlabel=,
+        fill=\ConvColor,
+        height=24,
+        width=1.8,
+        depth=24
+        }
+    };
+
+\draw [connection]  (mlp-east)    -- node {\midarrow} (head-west);
+
+\end{tikzpicture}
+\end{document}
