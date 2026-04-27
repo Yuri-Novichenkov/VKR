@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import mlflow
+import numpy as np
 import torch
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 from torch.utils.data import DataLoader
@@ -32,103 +33,9 @@ from src.models import (
     DGCNNClassification,
     LDGCNNSegmentation,
     LDGCNNClassification,
+    build_model,
 )
-
-
-def calculate_metrics(predictions, targets, num_classes, task="segmentation"):
-    predictions = predictions.cpu().numpy()
-    targets = targets.cpu().numpy()
-
-    if task == "classification":
-        accuracy = accuracy_score(targets, predictions)
-        cm = confusion_matrix(targets, predictions, labels=list(range(num_classes)))
-        report = classification_report(targets, predictions, labels=list(range(num_classes)), output_dict=True, zero_division=0)
-        return {
-            "accuracy": accuracy,
-            "confusion_matrix": cm,
-            "classification_report": report,
-        }
-
-    accuracy = accuracy_score(targets.flatten(), predictions.flatten())
-    cm = confusion_matrix(targets.flatten(), predictions.flatten(), labels=list(range(num_classes)))
-    ious = []
-    for i in range(num_classes):
-        intersection = cm[i, i]
-        union = cm[i, :].sum() + cm[:, i].sum() - intersection
-        ious.append(intersection / union if union > 0 else 0.0)
-    mean_iou = float(sum(ious) / len(ious))
-    report = classification_report(
-        targets.flatten(),
-        predictions.flatten(),
-        labels=list(range(num_classes)),
-        output_dict=True,
-        zero_division=0,
-    )
-    return {
-        "accuracy": accuracy,
-        "mean_iou": mean_iou,
-        "per_class_iou": ious,
-        "confusion_matrix": cm,
-        "classification_report": report,
-    }
-
-
-def build_model(
-    model_type,
-    task,
-    num_classes,
-    num_features,
-    k=20,
-    k_small=20,
-    k_large=40,
-    attention_type="none",
-    attention_k=16,
-    attention_heads=4,
-    attention_dropout=0.1,
-):
-    if model_type == "pointnet":
-        return (
-            PointNetSegmentation(num_classes=num_classes, num_features=num_features)
-            if task == "segmentation"
-            else PointNetClassification(num_classes=num_classes, num_features=num_features)
-        )
-    if model_type == "pointnet++":
-        return (
-            PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
-            if task == "segmentation"
-            else PointNetPlusPlusClassification(num_classes=num_classes, num_features=num_features)
-        )
-    if model_type == "dgcnn":
-        return (
-            DGCNNSegmentation(num_classes=num_classes, num_features=num_features, k=k)
-            if task == "segmentation"
-            else DGCNNClassification(num_classes=num_classes, num_features=num_features, k=k)
-        )
-    if model_type == "ldgcnn":
-        return (
-            LDGCNNSegmentation(
-                num_classes=num_classes,
-                num_features=num_features,
-                k_small=k_small,
-                k_large=k_large,
-                attention_type=attention_type,
-                attention_k=attention_k,
-                attention_heads=attention_heads,
-                attention_dropout=attention_dropout,
-            )
-            if task == "segmentation"
-            else LDGCNNClassification(
-                num_classes=num_classes,
-                num_features=num_features,
-                k_small=k_small,
-                k_large=k_large,
-                attention_type=attention_type,
-                attention_k=attention_k,
-                attention_heads=attention_heads,
-                attention_dropout=attention_dropout,
-            )
-        )
-    raise ValueError(f"Неизвестная модель: {model_type}")
+from src.utils.metrics import calculate_metrics
 
 
 def autocast_context(use_amp):
@@ -222,6 +129,7 @@ def main():
     attention_heads = checkpoint.get("attention_heads", 4)
     attention_dropout = checkpoint.get("attention_dropout", 0.1)
     class_to_idx = checkpoint.get("class_to_idx")
+    normalize_stats = checkpoint.get("normalize_stats")
 
     model = build_model(
         model_type,
@@ -243,6 +151,9 @@ def main():
     test_path = resolve_test_path(args)
     print(f"Тестовые данные: {test_path}")
 
+    if normalize_stats is None:
+        print("Предупреждение: normalize_stats отсутствуют в чекпоинте. "
+              "Нормализация Intensity будет вычислена из тестовых данных.")
     test_dataset = LiDARDataset(
         test_path,
         num_points=args.num_points,
@@ -250,6 +161,7 @@ def main():
         has_labels=True,
         task=task,
         class_to_idx=class_to_idx,
+        normalize_stats=normalize_stats,
     )
     test_dataset.num_classes = num_classes
     test_loader = DataLoader(
@@ -260,10 +172,33 @@ def main():
         pin_memory=True if torch.cuda.is_available() else False,
     )
 
+    # Для сегментации метрики считаем на уровне исходной сцены после
+    # voting по перекрывающимся окнам (как в predictions.py). Без voting
+    # mIoU/Accuracy оценивают модель на случайно нарезанных блоках, что
+    # методологически некорректно: на перекрытиях точки классифицируются
+    # многократно, и пограничные случаи доминируют в метриках.
+    use_voting = (
+        task == "segmentation"
+        and not getattr(test_dataset, "chunked", False)
+        and getattr(test_dataset, "labels", None) is not None
+        and getattr(test_dataset, "features", None) is not None
+    )
+    if task == "segmentation" and not use_voting:
+        print(
+            "Внимание: voting по перекрытиям недоступен (chunked-датасет или "
+            "отсутствуют labels/features). Метрики считаются по блокам."
+        )
+
+    vote_counts = None
+    if use_voting:
+        num_total_points = len(test_dataset.features)
+        vote_counts = np.zeros((num_total_points, num_classes), dtype=np.int32)
+
     all_predictions = []
     all_targets = []
     total_points = 0
     total_batches = 0
+    sample_offset = 0
     inference_start = time.perf_counter()
     with autocast_context(use_amp):
         for features, labels in test_loader:
@@ -284,20 +219,58 @@ def main():
                 torch.cuda.synchronize()
             _ = time.perf_counter() - batch_start
 
-            all_predictions.append(pred_classes)
-            all_targets.append(labels)
-            total_batches += 1
-            # Для throughput считаем либо число облаков, либо число точек.
-            if task == "classification":
-                total_points += labels.shape[0]
-            else:
+            if use_voting:
+                pred_np = pred_classes.cpu().numpy()
+                batch_size = pred_np.shape[0]
+                for b in range(batch_size):
+                    cloud_indices = test_dataset.get_cloud_point_indices(
+                        sample_offset + b
+                    )
+                    np.add.at(vote_counts, (cloud_indices, pred_np[b]), 1)
+                sample_offset += batch_size
                 total_points += labels.numel()
+            else:
+                all_predictions.append(pred_classes)
+                all_targets.append(labels)
+                if task == "classification":
+                    total_points += labels.shape[0]
+                else:
+                    total_points += labels.numel()
+            total_batches += 1
 
     inference_time = time.perf_counter() - inference_start
-    all_predictions = torch.cat(all_predictions, dim=0)
-    all_targets = torch.cat(all_targets, dim=0)
 
-    metrics = calculate_metrics(all_predictions, all_targets, num_classes, task=task)
+    if use_voting:
+        covered_mask = vote_counts.sum(axis=1) > 0
+        coverage_ratio = float(covered_mask.sum()) / max(1, len(covered_mask))
+        print(f"Покрытие точек voting-ом: {coverage_ratio * 100:.2f}%")
+
+        # Пропуск непокрытых точек искажает метрики (занижает знаменатель
+        # в IoU, прячет пробелы в нарезке). Правильное поведение:
+        #  - при полном покрытии считать по всем точкам;
+        #  - при неполном — жёстко падать, чтобы бага нарезки не маскировалась.
+        # Dataset (`_create_point_clouds`) гарантирует 100% coverage, поэтому
+        # штатно этот assert не должен срабатывать.
+        if not covered_mask.all():
+            num_missing = int((~covered_mask).sum())
+            raise RuntimeError(
+                f"Voting не покрыл {num_missing} точек из {len(covered_mask)}. "
+                "Это указывает на проблему нарезки в LiDARDataset "
+                "(_create_point_clouds должен давать 100% покрытие)."
+            )
+
+        aggregated_preds = vote_counts.argmax(axis=1)
+        true_labels = np.asarray(test_dataset.labels, dtype=np.int64)
+
+        preds_tensor = torch.from_numpy(aggregated_preds.astype(np.int64))
+        targets_tensor = torch.from_numpy(true_labels)
+        metrics = calculate_metrics(
+            preds_tensor, targets_tensor, num_classes, task="segmentation", include_report=True
+        )
+    else:
+        all_predictions = torch.cat(all_predictions, dim=0)
+        all_targets = torch.cat(all_targets, dim=0)
+        metrics = calculate_metrics(all_predictions, all_targets, num_classes, task=task, include_report=True)
 
     print("\nРЕЗУЛЬТАТЫ ТЕСТИРОВАНИЯ")
     print("=" * 50)
@@ -335,9 +308,12 @@ def main():
                 "run_name": run_name,
             }
         )
+        mlflow.log_param("voting", bool(use_voting))
         mlflow.log_metric("test_accuracy", metrics["accuracy"])
         if task == "segmentation":
             mlflow.log_metric("test_miou", metrics["mean_iou"])
+        if use_voting:
+            mlflow.log_metric("voting_coverage", coverage_ratio)
         if inference_time > 0:
             mlflow.log_metric("inference_time_sec", inference_time)
             mlflow.log_metric("points_per_sec", total_points / inference_time)

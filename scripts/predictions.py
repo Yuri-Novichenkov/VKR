@@ -19,79 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.data import LiDARDataset
-from src.models import PointNetSegmentation, PointNetPlusPlusSegmentation, DGCNNSegmentation, LDGCNNSegmentation
-
-
-def build_model(
-    model_type,
-    num_classes,
-    num_features,
-    k=20,
-    k_small=20,
-    k_large=40,
-    attention_type="none",
-    attention_k=16,
-    attention_heads=4,
-    attention_dropout=0.1,
-):
-    if model_type == "pointnet":
-        return PointNetSegmentation(num_classes=num_classes, num_features=num_features)
-    if model_type == "pointnet++":
-        return PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
-    if model_type == "dgcnn":
-        return DGCNNSegmentation(num_classes=num_classes, num_features=num_features, k=k)
-    if model_type == "ldgcnn":
-        return LDGCNNSegmentation(
-            num_classes=num_classes,
-            num_features=num_features,
-            k_small=k_small,
-            k_large=k_large,
-            attention_type=attention_type,
-            attention_k=attention_k,
-            attention_heads=attention_heads,
-            attention_dropout=attention_dropout,
-        )
-    raise ValueError(f"Неизвестный тип модели: {model_type}")
-
-
-def load_dataframe(data_path):
-    # Функция дублирует логику чтения из Dataset, чтобы сохранить
-    # исходную таблицу с теми же колонками + предсказания.
-    path = Path(data_path)
-    suffix = path.suffix.lower()
-    if suffix in (".laz", ".las"):
-        try:
-            import laspy
-        except ImportError as exc:
-            raise ImportError(
-                "Для чтения .laz/.las установите laspy и lazrs: "
-                "pip install laspy lazrs"
-            ) from exc
-
-        las = laspy.read(str(path))
-        data = {
-            "X": np.asarray(las.x),
-            "Y": np.asarray(las.y),
-            "Z": np.asarray(las.z),
-        }
-        if hasattr(las, "red"):
-            data["R"] = np.asarray(las.red)
-        if hasattr(las, "green"):
-            data["G"] = np.asarray(las.green)
-        if hasattr(las, "blue"):
-            data["B"] = np.asarray(las.blue)
-        if hasattr(las, "intensity"):
-            data["Intensity"] = np.asarray(las.intensity)
-        if hasattr(las, "number_of_returns"):
-            data["NumberOfReturns"] = np.asarray(las.number_of_returns)
-        if hasattr(las, "return_number"):
-            data["ReturnNumber"] = np.asarray(las.return_number)
-        if hasattr(las, "classification"):
-            data["Classification"] = np.asarray(las.classification)
-        return pd.DataFrame(data)
-
-    return pd.read_csv(path, sep="\t")
+from src.data import LiDARDataset, load_dataframe
+from src.models import build_model
 
 
 def main():
@@ -133,6 +62,7 @@ def main():
     attention_heads = checkpoint.get("attention_heads", 4)
     attention_dropout = checkpoint.get("attention_dropout", 0.1)
     class_to_idx = checkpoint.get("class_to_idx")
+    normalize_stats = checkpoint.get("normalize_stats")
     idx_to_class = {
         int(idx): int(cls)
         for idx, cls in checkpoint.get("idx_to_class", {}).items()
@@ -142,8 +72,9 @@ def main():
 
     model = build_model(
         model_type,
-        num_classes,
-        num_features,
+        task="segmentation",
+        num_classes=num_classes,
+        num_features=num_features,
         k=k,
         k_small=k_small,
         k_large=k_large,
@@ -156,6 +87,9 @@ def main():
     model = model.to(device)
     model.eval()
 
+    if normalize_stats is None:
+        print("Предупреждение: normalize_stats отсутствуют в чекпоинте. "
+              "Нормализация Intensity будет вычислена из данных.")
     dataset = LiDARDataset(
         args.data,
         num_points=args.num_points,
@@ -167,6 +101,7 @@ def main():
         cache_chunked=args.cache_chunked,
         chunk_size=args.chunk_size,
         class_to_idx=class_to_idx,
+        normalize_stats=normalize_stats,
     )
     dataset.num_classes = num_classes
 

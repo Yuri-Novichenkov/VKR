@@ -20,6 +20,8 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
+from .io import load_dataframe as _load_dataframe_shared
+
 
 class LiDARDataset(Dataset):
     def __init__(
@@ -35,6 +37,7 @@ class LiDARDataset(Dataset):
         cache_chunked=False,
         chunk_size=512,
         class_to_idx=None,
+        normalize_stats=None,
     ):
         """
         Args:
@@ -44,6 +47,10 @@ class LiDARDataset(Dataset):
             augment: применять ли аугментацию данных
             has_labels: есть ли в данных колонка с метками (Classification)
             task: segmentation | classification
+            normalize_stats: статистики z-score из train-набора (dict или None).
+                Если None — вычисляются из текущих данных (train-поведение).
+                Если dict — применяются переданные stats (val/test).
+                После инициализации доступны как self.normalize_stats.
         """
         if task not in ("segmentation", "classification"):
             raise ValueError("task должен быть 'segmentation' или 'classification'")
@@ -62,6 +69,8 @@ class LiDARDataset(Dataset):
             if class_to_idx is not None
             else None
         )
+        self.external_normalize_stats = normalize_stats
+        self.normalize_stats = {}
         self._chunk_cache = None
         self._chunk_cache_idx = None
 
@@ -86,7 +95,7 @@ class LiDARDataset(Dataset):
                 return
 
         print(f"Загрузка данных из {data_path}")
-        self.data = self._load_dataframe(self.data_path)
+        self.data = _load_dataframe_shared(self.data_path)
         print(f"Загружено {len(self.data)} точек")
         
         # Определение признаков
@@ -105,6 +114,12 @@ class LiDARDataset(Dataset):
 
         if not all(f in self.use_features for f in ["X", "Y", "Z"]):
             raise ValueError("В данных должны быть координаты X, Y, Z")
+
+        # Контракт для графовых моделей: первые 3 канала всегда XYZ.
+        # Это гарантирует корректность kNN по геометрии (x[:, :3, :]) в
+        # DGCNN/LDGCNN и единообразный порядок входа для всех моделей.
+        extra_features = [f for f in self.use_features if f not in ["X", "Y", "Z"]]
+        self.use_features = ["X", "Y", "Z"] + extra_features
         
         # Извлечение признаков
         self.features = self.data[self.use_features].values.astype(np.float32)
@@ -120,9 +135,10 @@ class LiDARDataset(Dataset):
         
         # Нормализация координат (центрирование и масштабирование)
         self._normalize_coords()
-        
-        # Нормализация остальных признаков
-        self._normalize_features()
+
+        # Нормализация признаков: для Intensity z-score берётся из train-stats,
+        # чтобы val/test нормализовались на той же шкале, что и train.
+        self.normalize_stats = self._normalize_features(stats=self.external_normalize_stats)
         
         # Получение уникальных классов и создание маппинга меток
         # в непрерывный диапазон [0, num_classes-1] для CrossEntropy.
@@ -171,72 +187,207 @@ class LiDARDataset(Dataset):
                 self._save_cache(cache_path)
         
     def _normalize_coords(self):
-        """Нормализация координат X, Y, Z"""
+        """Глобальное центрирование координат X, Y, Z.
+
+        Per-block нормализация (центрирование по центроиду окна + масштабирование
+        к единичному шару) делается в `__getitem__`. Это важно для PointNet++
+        (фиксированные радиусы ball query) и DGCNN/LDGCNN (локальные kNN):
+        модели рассчитаны на то, что каждый блок ограничен единичной областью,
+        а не z-score по всей сцене.
+        """
         if "X" in self.use_features:
             x_idx = self.use_features.index("X")
             y_idx = self.use_features.index("Y")
             z_idx = self.use_features.index("Z")
-            
-            # Центрирование
+
+            # Только центрирование сцены (для численной стабильности
+            # при больших абсолютных UTM-координатах). Масштабирование
+            # выполняется локально в __getitem__.
             mean = np.mean(self.features[:, [x_idx, y_idx, z_idx]], axis=0)
             self.features[:, x_idx] -= mean[0]
             self.features[:, y_idx] -= mean[1]
             self.features[:, z_idx] -= mean[2]
-            
-            # Масштабирование
-            std = np.std(self.features[:, [x_idx, y_idx, z_idx]], axis=0)
-            std = np.where(std == 0, 1, std)  # Избегаем деления на ноль
-            self.features[:, x_idx] /= std[0]
-            self.features[:, y_idx] /= std[1]
-            self.features[:, z_idx] /= std[2]
     
-    def _normalize_features(self):
-        """Нормализация остальных признаков (R, G, B, Intensity и т.д.)"""
+    def _normalize_features(self, stats=None):
+        """
+        Нормализация R/G/B/Intensity и т.д.
+        stats=None → вычисляет z-score из текущих данных (train).
+        stats=dict → применяет переданные статистики (val/test).
+        Возвращает dict с использованными статистиками z-score признаков.
+        """
+        feat_stats = {}
         for i, feature_name in enumerate(self.use_features):
-            # Пропускаем координаты
             if feature_name in ["X", "Y", "Z"]:
                 continue
-            
-            # Нормализация к диапазону [0, 1]
+
             feature_values = self.features[:, i]
-            
-            # Для цветов (R, G, B) - нормализация к [0, 1]
+
+            # RGB: фиксированный диапазон разрядности — не зависит от файла.
+            # 16-bit (0–65535) или 8-bit (0–255) определяется по max_val.
             if feature_name in ["R", "G", "B"]:
-                max_val = np.max(feature_values)
-                if max_val > 0:
-                    self.features[:, i] = feature_values / max_val
-            
-            # Для Intensity и других стандартизация
+                max_val = float(np.max(feature_values))
+                if max_val > 255.0:
+                    norm_range = 65535.0
+                elif max_val > 1.0:
+                    norm_range = 255.0
+                else:
+                    norm_range = 1.0
+                self.features[:, i] = feature_values / norm_range
+
+            # Intensity, NumberOfReturns, ReturnNumber: z-score.
+            # Для val/test используем статистики из train, чтобы
+            # нормализация была согласована между сплитами.
             elif feature_name in ["Intensity", "NumberOfReturns", "ReturnNumber"]:
-                mean = np.mean(feature_values)
-                std = np.std(feature_values)
+                if stats and feature_name in stats:
+                    mean = float(stats[feature_name]["mean"])
+                    std = float(stats[feature_name]["std"])
+                else:
+                    mean = float(np.mean(feature_values))
+                    std = float(np.std(feature_values))
                 if std > 0:
                     self.features[:, i] = (feature_values - mean) / std
+                feat_stats[feature_name] = {"mean": mean, "std": std}
+
+        return feat_stats
     
     def _create_point_clouds(self):
         """
-        Разбиение данных на облака точек фиксированного размера
+        Пространственная нарезка сцены на окна фиксированного размера с
+        гарантированным 100% покрытием всех точек.
+
+        Для каждой seed-точки выбирается `num_points` ближайших соседей по XYZ
+        (kNN через KD-дерево). После первого прохода по случайным seed-ам
+        докидываем дополнительные блоки для всех ещё непокрытых точек —
+        это важно для корректного scene-level voting при оценке: если хотя бы
+        одна точка не попала ни в одно окно, её метка недоступна модели,
+        и метрики смещаются.
         """
         total_points = len(self.features)
-        
+
         if total_points < self.num_points:
-            # Если точек меньше чем нужно дополняем с повторением
-            indices = np.random.choice(total_points, self.num_points, replace=True)
+            # Гарантируем 100% покрытие: каждая исходная точка должна попасть
+            # хотя бы в один блок. Поэтому сначала берём все индексы без
+            # повторений, затем добиваем до num_points с replacement.
+            base_idx = np.arange(total_points, dtype=np.int64)
+            pad_count = self.num_points - total_points
+            pad_idx = np.random.choice(total_points, pad_count, replace=True).astype(np.int64)
+            indices = np.concatenate([base_idx, pad_idx], axis=0)
+            np.random.shuffle(indices)
             self.cloud_indices = indices.reshape(1, -1).astype(np.int32)
-        else:
-            # Разбиваем на окна с 50% перекрытием:
-            # это увеличивает число обучающих примеров.
-            step = max(1, self.num_points // 2)  # 50% перекрытие
-            num_clouds = (total_points - self.num_points) // step + 1
-            starts = np.arange(num_clouds, dtype=np.int64) * step
-            last_start = total_points - self.num_points
-            if starts[-1] != last_start:
-                starts = np.append(starts, last_start)
-            self.cloud_indices = (
-                starts[:, None] + np.arange(self.num_points, dtype=np.int64)[None, :]
-            ).astype(np.int32)
-        
-        print(f"Создано {len(self.cloud_indices)} облаков точек")
+            print(f"Создано {len(self.cloud_indices)} облаков точек (padding, coverage=100%)")
+            return
+
+        # Извлечение координат для пространственной нарезки
+        x_idx = self.use_features.index("X")
+        y_idx = self.use_features.index("Y")
+        z_idx = self.use_features.index("Z")
+        xyz = self.features[:, [x_idx, y_idx, z_idx]].astype(np.float64)
+
+        # Построение KD-дерева (используется и для основного прохода, и для добора)
+        tree = None
+        backend = None
+        query_fn = None
+        try:
+            from sklearn.neighbors import KDTree
+
+            tree = KDTree(xyz)
+            backend = "sklearn.KDTree"
+
+            def _query(seeds_xyz):
+                idx = tree.query(seeds_xyz, k=self.num_points, return_distance=False)
+                return np.asarray(idx, dtype=np.int32)
+
+            query_fn = _query
+        except ImportError:
+            pass
+
+        if tree is None:
+            try:
+                from scipy.spatial import cKDTree
+
+                tree = cKDTree(xyz)
+                backend = "scipy.cKDTree"
+
+                def _query(seeds_xyz):
+                    _d, idx = tree.query(seeds_xyz, k=self.num_points)
+                    return np.asarray(idx, dtype=np.int32)
+
+                query_fn = _query
+            except ImportError:
+                pass
+
+        if query_fn is None:
+            backend = "numpy fallback"
+
+            def _query(seeds_xyz):
+                out = np.empty((len(seeds_xyz), self.num_points), dtype=np.int32)
+                for i in range(len(seeds_xyz)):
+                    diff = xyz - seeds_xyz[i]
+                    d = np.einsum("ij,ij->i", diff, diff)
+                    nn = np.argpartition(d, self.num_points - 1)[: self.num_points]
+                    out[i] = nn
+                return out
+
+            query_fn = _query
+
+        # Основной проход: случайные seed-ы, ~2x покрытие
+        num_clouds = max(1, (2 * total_points + self.num_points - 1) // self.num_points)
+        rng = np.random.default_rng(42)
+        replace_seeds = num_clouds > total_points
+        seed_indices = rng.choice(total_points, size=num_clouds, replace=replace_seeds)
+
+        cloud_indices = query_fn(xyz[seed_indices])
+        if cloud_indices.ndim == 1:
+            cloud_indices = cloud_indices.reshape(1, -1)
+
+        # Гарантируем полное покрытие: пока есть непокрытые точки,
+        # используем их как seed для дополнительных блоков. Каждый новый блок
+        # покрывает минимум 1 новую точку (сам seed) и ещё num_points-1 соседей,
+        # поэтому цикл сходится за O(total_points / num_points) итераций.
+        covered = np.zeros(total_points, dtype=bool)
+        covered[cloud_indices.ravel()] = True
+        extra_blocks = 0
+        max_iterations = 64  # защита от бесконечного цикла
+        iteration = 0
+        while not covered.all() and iteration < max_iterations:
+            iteration += 1
+            uncovered_idx = np.flatnonzero(~covered)
+            # Берём не более чем по 1 seed на (num_points/4) непокрытых точек,
+            # чтобы быстро сокращать число итераций, не раздувая датасет.
+            batch = max(1, min(len(uncovered_idx), len(uncovered_idx) // max(1, self.num_points // 4) + 1))
+            # Выбираем равномерно по индексам непокрытых — этого достаточно,
+            # потому что каждый добавленный блок уже kNN-образно тянет соседей.
+            if batch >= len(uncovered_idx):
+                extra_seed_idx = uncovered_idx
+            else:
+                step = max(1, len(uncovered_idx) // batch)
+                extra_seed_idx = uncovered_idx[::step][:batch]
+
+            extra_nn = query_fn(xyz[extra_seed_idx])
+            if extra_nn.ndim == 1:
+                extra_nn = extra_nn.reshape(1, -1)
+            cloud_indices = np.concatenate([cloud_indices, extra_nn], axis=0)
+            covered[extra_nn.ravel()] = True
+            extra_blocks += len(extra_nn)
+
+        if not covered.all():
+            # Крайне маловероятно, но на всякий случай — жёсткая гарантия:
+            # для каждой оставшейся точки создаём персональный блок.
+            remaining = np.flatnonzero(~covered)
+            extra_nn = query_fn(xyz[remaining])
+            if extra_nn.ndim == 1:
+                extra_nn = extra_nn.reshape(1, -1)
+            cloud_indices = np.concatenate([cloud_indices, extra_nn], axis=0)
+            covered[extra_nn.ravel()] = True
+            extra_blocks += len(extra_nn)
+
+        assert covered.all(), "Не удалось гарантировать 100% покрытие точек блоками"
+
+        self.cloud_indices = cloud_indices.astype(np.int32)
+        print(
+            f"Создано {len(self.cloud_indices)} облаков точек "
+            f"(основных={num_clouds}, добор={extra_blocks}, backend={backend})"
+        )
     
     def __len__(self):
         if getattr(self, "chunked", False):
@@ -249,16 +400,35 @@ class LiDARDataset(Dataset):
         """
         if getattr(self, "chunked", False):
             cloud_features, cloud_labels, _cloud_indices = self._load_chunk_item(idx)
-            features = cloud_features
+            features = cloud_features.copy()
             labels = cloud_labels
         else:
             # Получение индексов точек для этого облака
             point_indices = self.cloud_indices[idx]
 
-            # Извлечение признаков и меток
-            features = self.features[point_indices]
+            # Извлечение признаков и меток; .copy() важен, чтобы последующая
+            # per-block нормализация и аугментация не затронули self.features.
+            features = self.features[point_indices].copy()
             labels = self.labels[point_indices]
-        
+
+        # Per-block нормализация координат (центрирование по центроиду окна
+        # и масштабирование к единичному шару). Приводит каждый блок к одному
+        # масштабу, на который рассчитаны радиусы PointNet++ (0.2/0.4) и
+        # kNN в DGCNN/LDGCNN.
+        if "X" in self.use_features:
+            x_idx = self.use_features.index("X")
+            y_idx = self.use_features.index("Y")
+            z_idx = self.use_features.index("Z")
+            coords = features[:, [x_idx, y_idx, z_idx]].astype(np.float32)
+            centroid = coords.mean(axis=0, keepdims=True)
+            coords = coords - centroid
+            max_norm = float(np.max(np.linalg.norm(coords, axis=1)))
+            if max_norm > 1e-6:
+                coords = coords / max_norm
+            features[:, x_idx] = coords[:, 0]
+            features[:, y_idx] = coords[:, 1]
+            features[:, z_idx] = coords[:, 2]
+
         # Аугментация данных
         if self.augment:
             features = self._augment_point_cloud(features)
@@ -289,7 +459,11 @@ class LiDARDataset(Dataset):
             return None
 
         key = {
-            "cache_format": 2,
+            # cache_format=4: пространственная нарезка блоков с гарантией
+            # полного покрытия + фиксированный порядок входных каналов
+            # (XYZ первыми). Изменение ломает совместимость со
+            # старыми кэшами, поэтому бампаем версию.
+            "cache_format": 4,
             "data_path": str(self.data_path.resolve()),
             "num_points": int(self.num_points),
             "use_features": use_features,
@@ -433,15 +607,26 @@ class LiDARDataset(Dataset):
                 points[:, y_idx] = coords[:, 1]
                 points[:, z_idx] = coords[:, 2]
         
-        # Случайное масштабирование
+        # Случайное масштабирование.
+        # После масштабирования повторно нормализуем координаты к единичному
+        # шару, чтобы не нарушать предположения ball query в PointNet++
+        # (радиусы 0.2/0.4) и kNN-окрестности в DGCNN/LDGCNN.
         if random.random() > 0.5:
             scale = np.random.uniform(0.8, 1.2)
-            if "X" in self.use_features:
-                points[:, self.use_features.index("X")] *= scale
-            if "Y" in self.use_features:
-                points[:, self.use_features.index("Y")] *= scale
-            if "Z" in self.use_features:
-                points[:, self.use_features.index("Z")] *= scale
+            if all(ax in self.use_features for ax in ["X", "Y", "Z"]):
+                x_idx = self.use_features.index("X")
+                y_idx = self.use_features.index("Y")
+                z_idx = self.use_features.index("Z")
+                points[:, x_idx] *= scale
+                points[:, y_idx] *= scale
+                points[:, z_idx] *= scale
+                # Повторная нормализация к единичному шару
+                coords = points[:, [x_idx, y_idx, z_idx]]
+                max_norm = float(np.max(np.linalg.norm(coords, axis=1)))
+                if max_norm > 1e-6:
+                    points[:, x_idx] = coords[:, 0] / max_norm
+                    points[:, y_idx] = coords[:, 1] / max_norm
+                    points[:, z_idx] = coords[:, 2] / max_norm
         
         # Добавление шума
         if random.random() > 0.5:
@@ -452,39 +637,6 @@ class LiDARDataset(Dataset):
 
         return points.astype(np.float32)
 
+    # Метод сохранён для обратной совместимости; делегирует в src.data.io.
     def _load_dataframe(self, data_path):
-        suffix = data_path.suffix.lower()
-        if suffix in (".laz", ".las"):
-            try:
-                import laspy
-            except ImportError as exc:
-                raise ImportError(
-                    "Для чтения .laz/.las установите laspy и lazrs: "
-                    "pip install laspy lazrs"
-                ) from exc
-
-            las = laspy.read(str(data_path))
-            data = {
-                "X": np.asarray(las.x),
-                "Y": np.asarray(las.y),
-                "Z": np.asarray(las.z),
-            }
-
-            if hasattr(las, "red"):
-                data["R"] = np.asarray(las.red)
-            if hasattr(las, "green"):
-                data["G"] = np.asarray(las.green)
-            if hasattr(las, "blue"):
-                data["B"] = np.asarray(las.blue)
-            if hasattr(las, "intensity"):
-                data["Intensity"] = np.asarray(las.intensity)
-            if hasattr(las, "number_of_returns"):
-                data["NumberOfReturns"] = np.asarray(las.number_of_returns)
-            if hasattr(las, "return_number"):
-                data["ReturnNumber"] = np.asarray(las.return_number)
-            if hasattr(las, "classification"):
-                data["Classification"] = np.asarray(las.classification)
-
-            return pd.DataFrame(data)
-
-        return pd.read_csv(data_path, sep="\t")
+        return _load_dataframe_shared(data_path)

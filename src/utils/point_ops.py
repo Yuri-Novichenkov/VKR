@@ -22,8 +22,9 @@ def pairwise_distance(x):
     # чтобы посчитать все расстояния батчево без Python-циклов.
     xx = torch.sum(x ** 2, dim=1, keepdim=True)  # (B, 1, N)
     inner = -2 * torch.matmul(x.transpose(2, 1), x)  # (B, N, N)
+    # clamp устраняет слабо-отрицательные значения на диагонали из-за float32.
     dist = xx.transpose(2, 1) + inner + xx
-    return dist
+    return dist.clamp(min=0.0)
 
 
 def knn(x, k):

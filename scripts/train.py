@@ -13,6 +13,7 @@
 
 import argparse
 import json
+import logging
 import os
 import random
 import sys
@@ -27,7 +28,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch import amp
 from contextlib import contextmanager
-from sklearn.metrics import accuracy_score, confusion_matrix
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -45,42 +45,15 @@ from src.models import (
     DGCNNClassification,
     LDGCNNSegmentation,
     LDGCNNClassification,
+    build_model,
 )
+from src.utils.metrics import calculate_metrics
 
-
-def calculate_metrics(predictions, targets, num_classes, task="segmentation"):
-    predictions = predictions.cpu().numpy()
-    targets = targets.cpu().numpy()
-
-    if task == "classification":
-        accuracy = accuracy_score(targets, predictions)
-        cm = confusion_matrix(targets, predictions, labels=list(range(num_classes)))
-        return {
-            "accuracy": accuracy,
-            "confusion_matrix": cm,
-        }
-
-    # segmentation: считаем метрики на уровне отдельных точек.
-    accuracy = accuracy_score(targets.flatten(), predictions.flatten())
-    cm = confusion_matrix(targets.flatten(), predictions.flatten(), labels=list(range(num_classes)))
-
-    ious = []
-    for i in range(num_classes):
-        intersection = cm[i, i]
-        union = cm[i, :].sum() + cm[:, i].sum() - intersection
-        if union > 0:
-            iou = intersection / union
-            ious.append(iou)
-        else:
-            ious.append(0.0)
-
-    mean_iou = float(np.mean(ious))
-    return {
-        "accuracy": accuracy,
-        "mean_iou": mean_iou,
-        "per_class_iou": ious,
-        "confusion_matrix": cm,
-    }
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -151,7 +124,7 @@ def train_epoch(
                     loss = ce_loss
                     reg_loss = torch.tensor(0.0, device=predictions.device)
                 else:
-                    raise ValueError(f"Неизвестный loss_type: {loss_type}")
+                    raise ValueError(f"Неизвестный loss_type: {loss_type} (lovasz не поддерживается для classification)")
                 pred_classes = torch.argmax(predictions, dim=1)
             else:
                 if model_type == "pointnet":
@@ -193,6 +166,36 @@ def train_epoch(
                         )
                         reg_loss = reg_coords + reg_features
                         loss = ce_loss + lambda_reg * reg_loss
+                    elif loss_type == "lovasz":
+                        try:
+                            from lovász_losses import lovász_softmax
+                        except (ImportError, ModuleNotFoundError):
+                            from lovasz_losses import lovasz_softmax as lovász_softmax
+                        bsz, n_points, n_classes = predictions.shape
+                        probs = torch.softmax(predictions, dim=2).permute(0, 2, 1).contiguous()  # (B, C, N)
+                        ce_loss = lovász_softmax(probs, labels, classes="present")
+                        if class_weights is not None:
+                            # Вспомогательный взвешенный CE для усиления балансировки
+                            flat_p = predictions.reshape(-1, n_classes)
+                            flat_l = labels.reshape(-1)
+                            aux = F.cross_entropy(flat_p, flat_l, weight=class_weights)
+                            ce_loss = ce_loss + 0.5 * aux
+                        identity_3 = torch.eye(3, device=transform_coords.device).unsqueeze(0)
+                        reg_coords = torch.mean(
+                            torch.norm(
+                                torch.bmm(transform_coords, transform_coords.transpose(2, 1)) - identity_3,
+                                dim=(1, 2),
+                            )
+                        )
+                        identity_64 = torch.eye(64, device=transform_features.device).unsqueeze(0)
+                        reg_features = torch.mean(
+                            torch.norm(
+                                torch.bmm(transform_features, transform_features.transpose(2, 1)) - identity_64,
+                                dim=(1, 2),
+                            )
+                        )
+                        reg_loss = reg_coords + reg_features
+                        loss = ce_loss + lambda_reg * reg_loss
                     else:
                         raise ValueError(f"Неизвестный loss_type: {loss_type}")
                 else:
@@ -217,17 +220,49 @@ def train_epoch(
                         ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
                         loss = ce_loss
                         reg_loss = torch.tensor(0.0, device=predictions.device)
+                    elif loss_type == "lovasz":
+                        try:
+                            from lovász_losses import lovász_softmax
+                        except (ImportError, ModuleNotFoundError):
+                            from lovasz_losses import lovasz_softmax as lovász_softmax
+                        bsz, n_points, n_classes = predictions.shape
+                        probs = torch.softmax(predictions, dim=2).permute(0, 2, 1).contiguous()  # (B, C, N)
+                        ce_loss = lovász_softmax(probs, labels, classes="present")
+                        if class_weights is not None:
+                            flat_p = predictions.reshape(-1, n_classes)
+                            flat_l = labels.reshape(-1)
+                            aux = F.cross_entropy(flat_p, flat_l, weight=class_weights)
+                            ce_loss = ce_loss + 0.5 * aux
+                        loss = ce_loss
+                        reg_loss = torch.tensor(0.0, device=predictions.device)
                     else:
                         raise ValueError(f"Неизвестный loss_type: {loss_type}")
                 pred_classes = torch.argmax(predictions, dim=2)
 
+        # NaN-guard: ловим расхождение как можно раньше. Без этого молчаливый
+        # NaN (например, при AMP + ненормализованных координатах PointNet++)
+        # проходит всю тренировку с return_code=0 и даёт бесполезный чекпоинт.
+        if not torch.isfinite(loss):
+            ce_val = float(ce_loss.item()) if ce_loss is not None else float("nan")
+            reg_val = float(reg_loss.item()) if (reg_loss is not None and reg_loss.numel() > 0) else 0.0
+            raise RuntimeError(
+                "Train loss is not finite "
+                f"(loss={loss.item()}, ce_loss={ce_val}, reg_loss={reg_val}). "
+                "Тренировка расходится — вероятные причины: AMP + ненормализованные координаты, "
+                "слишком большой lr, неправильные радиусы PointNet++, взорвавшиеся class_weights."
+            )
+
         optimizer.zero_grad()
         if use_amp and scaler is not None:
             scaler.scale(loss).backward()
+            # unscale перед clip, чтобы норма считалась в исходных единицах.
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
         total_loss += loss.item()
@@ -260,11 +295,35 @@ def validate(
     loss_type="ce",
     focal_gamma=2.0,
     lambda_reg=0.001,
+    val_dataset=None,
 ):
+    """
+    Выбор метрик:
+    - segmentation: если передан val_dataset и он не chunked, то для
+      оценки используется scene-level voting по перекрывающимся окнам
+      (как в test.py / predictions.py). Иначе — block-level.
+    - classification: всегда block-level (один label на окно).
+    """
     model.eval()
     total_loss = 0
     all_predictions = []
     all_targets = []
+
+    # Включаем voting только если: задача — сегментация, датасет передан,
+    # не chunked и предоставляет labels/features в памяти. shuffle=False
+    # для val_loader уже гарантируется в main().
+    use_voting = (
+        task == "segmentation"
+        and val_dataset is not None
+        and not getattr(val_dataset, "chunked", False)
+        and getattr(val_dataset, "labels", None) is not None
+        and getattr(val_dataset, "features", None) is not None
+    )
+    vote_counts = None
+    sample_offset = 0
+    if use_voting:
+        num_total_points = len(val_dataset.features)
+        vote_counts = np.zeros((num_total_points, num_classes), dtype=np.int32)
 
     with torch.no_grad():
         pbar = tqdm(val_loader, desc="Validation")
@@ -293,7 +352,7 @@ def validate(
                         loss = ce_loss
                         reg_loss = torch.tensor(0.0, device=predictions.device)
                     else:
-                        raise ValueError(f"Неизвестный loss_type: {loss_type}")
+                        raise ValueError(f"Неизвестный loss_type: {loss_type} (lovasz не поддерживается для classification)")
                     pred_classes = torch.argmax(predictions, dim=1)
                 else:
                     if model_type == "pointnet":
@@ -335,6 +394,35 @@ def validate(
                             )
                             reg_loss = reg_coords + reg_features
                             loss = ce_loss + lambda_reg * reg_loss
+                        elif loss_type == "lovasz":
+                            try:
+                                from lovász_losses import lovász_softmax
+                            except (ImportError, ModuleNotFoundError):
+                                from lovasz_losses import lovasz_softmax as lovász_softmax
+                            bsz, n_points, n_classes = predictions.shape
+                            probs = torch.softmax(predictions, dim=2).permute(0, 2, 1).contiguous()  # (B, C, N)
+                            ce_loss = lovász_softmax(probs, labels, classes="present")
+                            if class_weights is not None:
+                                flat_p = predictions.reshape(-1, n_classes)
+                                flat_l = labels.reshape(-1)
+                                aux = F.cross_entropy(flat_p, flat_l, weight=class_weights)
+                                ce_loss = ce_loss + 0.5 * aux
+                            identity_3 = torch.eye(3, device=transform_coords.device).unsqueeze(0)
+                            reg_coords = torch.mean(
+                                torch.norm(
+                                    torch.bmm(transform_coords, transform_coords.transpose(2, 1)) - identity_3,
+                                    dim=(1, 2),
+                                )
+                            )
+                            identity_64 = torch.eye(64, device=transform_features.device).unsqueeze(0)
+                            reg_features = torch.mean(
+                                torch.norm(
+                                    torch.bmm(transform_features, transform_features.transpose(2, 1)) - identity_64,
+                                    dim=(1, 2),
+                                )
+                            )
+                            reg_loss = reg_coords + reg_features
+                            loss = ce_loss + lambda_reg * reg_loss
                         else:
                             raise ValueError(f"Неизвестный loss_type: {loss_type}")
                     else:
@@ -359,19 +447,62 @@ def validate(
                             ce_loss = (((1.0 - pt) ** focal_gamma) * ce_per_sample).mean()
                             loss = ce_loss
                             reg_loss = torch.tensor(0.0, device=predictions.device)
+                        elif loss_type == "lovasz":
+                            try:
+                                from lovász_losses import lovász_softmax
+                            except (ImportError, ModuleNotFoundError):
+                                from lovasz_losses import lovasz_softmax as lovász_softmax
+                            bsz, n_points, n_classes = predictions.shape
+                            probs = torch.softmax(predictions, dim=2).permute(0, 2, 1).contiguous()  # (B, C, N)
+                            ce_loss = lovász_softmax(probs, labels, classes="present")
+                            if class_weights is not None:
+                                flat_p = predictions.reshape(-1, n_classes)
+                                flat_l = labels.reshape(-1)
+                                aux = F.cross_entropy(flat_p, flat_l, weight=class_weights)
+                                ce_loss = ce_loss + 0.5 * aux
+                            loss = ce_loss
+                            reg_loss = torch.tensor(0.0, device=predictions.device)
                         else:
                             raise ValueError(f"Неизвестный loss_type: {loss_type}")
                     pred_classes = torch.argmax(predictions, dim=2)
 
             total_loss += loss.item()
-            all_predictions.append(pred_classes)
-            all_targets.append(labels)
+
+            if use_voting:
+                pred_np = pred_classes.cpu().numpy()
+                bsz = pred_np.shape[0]
+                for b in range(bsz):
+                    cloud_indices = val_dataset.get_cloud_point_indices(
+                        sample_offset + b
+                    )
+                    np.add.at(vote_counts, (cloud_indices, pred_np[b]), 1)
+                sample_offset += bsz
+            else:
+                all_predictions.append(pred_classes)
+                all_targets.append(labels)
 
             pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
-    all_predictions = torch.cat(all_predictions, dim=0)
-    all_targets = torch.cat(all_targets, dim=0)
-    metrics = calculate_metrics(all_predictions, all_targets, num_classes, task=task)
+    if use_voting:
+        covered_mask = vote_counts.sum(axis=1) > 0
+        if not covered_mask.all():
+            num_missing = int((~covered_mask).sum())
+            raise RuntimeError(
+                f"Voting не покрыл {num_missing} точек из {len(covered_mask)} "
+                "на валидации. Dataset._create_point_clouds должен давать "
+                "100% покрытие (проверить spatial slicing)."
+            )
+        aggregated_preds = vote_counts.argmax(axis=1)
+        true_labels = np.asarray(val_dataset.labels, dtype=np.int64)
+        preds_tensor = torch.from_numpy(aggregated_preds.astype(np.int64))
+        targets_tensor = torch.from_numpy(true_labels)
+        metrics = calculate_metrics(
+            preds_tensor, targets_tensor, num_classes, task="segmentation"
+        )
+    else:
+        all_predictions = torch.cat(all_predictions, dim=0)
+        all_targets = torch.cat(all_targets, dim=0)
+        metrics = calculate_metrics(all_predictions, all_targets, num_classes, task=task)
     metrics["loss"] = total_loss / len(val_loader)
     return metrics
 
@@ -388,64 +519,6 @@ def resolve_data_paths(args):
     train_data = os.path.join(data_root, f"{args.dataset}_train.txt")
     val_data = os.path.join(data_root, f"{args.dataset}_val.txt")
     return train_data, val_data
-
-
-def build_model(
-    model_type,
-    task,
-    num_classes,
-    num_features,
-    k=20,
-    k_small=20,
-    k_large=40,
-    attention_type="none",
-    attention_k=16,
-    attention_heads=4,
-    attention_dropout=0.1,
-):
-    if model_type == "pointnet":
-        return (
-            PointNetSegmentation(num_classes=num_classes, num_features=num_features)
-            if task == "segmentation"
-            else PointNetClassification(num_classes=num_classes, num_features=num_features)
-        )
-    if model_type == "pointnet++":
-        return (
-            PointNetPlusPlusSegmentation(num_classes=num_classes, num_features=num_features)
-            if task == "segmentation"
-            else PointNetPlusPlusClassification(num_classes=num_classes, num_features=num_features)
-        )
-    if model_type == "dgcnn":
-        return (
-            DGCNNSegmentation(num_classes=num_classes, num_features=num_features, k=k)
-            if task == "segmentation"
-            else DGCNNClassification(num_classes=num_classes, num_features=num_features, k=k)
-        )
-    if model_type == "ldgcnn":
-        return (
-            LDGCNNSegmentation(
-                num_classes=num_classes,
-                num_features=num_features,
-                k_small=k_small,
-                k_large=k_large,
-                attention_type=attention_type,
-                attention_k=attention_k,
-                attention_heads=attention_heads,
-                attention_dropout=attention_dropout,
-            )
-            if task == "segmentation"
-            else LDGCNNClassification(
-                num_classes=num_classes,
-                num_features=num_features,
-                k_small=k_small,
-                k_large=k_large,
-                attention_type=attention_type,
-                attention_k=attention_k,
-                attention_heads=attention_heads,
-                attention_dropout=attention_dropout,
-            )
-        )
-    raise ValueError(f"Неизвестная модель: {model_type}")
 
 
 def set_seed(seed, deterministic=False):
@@ -553,6 +626,13 @@ def main():
     parser.add_argument("--batch_size", type=int, default=8, help="Размер батча")
     parser.add_argument("--epochs", type=int, default=100, help="Количество эпох")
     parser.add_argument("--lr", type=float, default=0.001, help="Скорость обучения")
+    parser.add_argument(
+        "--lr_scheduler",
+        type=str,
+        default="step",
+        choices=["step", "cosine"],
+        help="Планировщик lr: step (StepLR, шаг 20 эпох, gamma 0.7) или cosine (CosineAnnealingLR до lr*0.01)",
+    )
     parser.add_argument("--num_classes", type=int, default=None, help="Количество классов")
     parser.add_argument("--lambda_reg", type=float, default=0.001, help="Коэффициент регуляризации трансформаций")
     parser.add_argument("--save_dir", type=str, default="checkpoints", help="Директория для сохранения моделей")
@@ -576,7 +656,7 @@ def main():
     parser.add_argument("--attention_k", type=int, default=16, help="Размер локального окна attention")
     parser.add_argument("--attention_heads", type=int, default=4, help="Количество attention heads")
     parser.add_argument("--attention_dropout", type=float, default=0.1, help="Dropout в attention")
-    parser.add_argument("--loss_type", type=str, default="ce", choices=["ce", "focal", "cb_focal"], help="Тип функции потерь")
+    parser.add_argument("--loss_type", type=str, default="ce", choices=["ce", "focal", "cb_focal", "lovasz"], help="Тип функции потерь")
     parser.add_argument("--focal_gamma", type=float, default=2.0, help="Gamma для focal loss")
     parser.add_argument(
         "--class_balance",
@@ -596,6 +676,18 @@ def main():
     parser.add_argument("--allow_windows_workers", action="store_true", help="Разрешить num_workers>0 на Windows")
     parser.add_argument("--seed", type=int, default=42, help="Seed для воспроизводимости")
     parser.add_argument(
+        "--early_stopping_patience",
+        type=int,
+        default=0,
+        help="Ранний останов: число эпох без улучшения (0 отключает early stopping).",
+    )
+    parser.add_argument(
+        "--early_stopping_min_delta",
+        type=float,
+        default=0.0,
+        help="Минимальное улучшение val-метрики, чтобы считать эпоху 'лучше'.",
+    )
+    parser.add_argument(
         "--metrics_json_path",
         type=str,
         default=None,
@@ -610,15 +702,17 @@ def main():
     args = parser.parse_args()
     if args.loss_type == "cb_focal" and args.class_balance == "none":
         raise ValueError("Для --loss_type cb_focal необходимо включить --class_balance (inverse/effective).")
+    if args.loss_type == "lovasz" and args.task == "classification":
+        raise ValueError("--loss_type lovasz поддерживается только для задачи segmentation.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"device: {device}")
+    logger.info("device: %s", device)
     set_seed(args.seed, deterministic=args.deterministic)
-    print(f"Seed: {args.seed}")
-    print(f"Deterministic mode: {args.deterministic}")
+    logger.info("Seed: %s", args.seed)
+    logger.info("Deterministic mode: %s", args.deterministic)
 
     if os.name == "nt" and args.num_workers > 0 and not args.allow_windows_workers:
-        print("Windows: num_workers>0 может приводить к ошибкам. Устанавливаю num_workers=0.")
+        logger.warning("Windows: num_workers>0 может приводить к ошибкам. Устанавливаю num_workers=0.")
         args.num_workers = 0
 
     # Единый формат хранения checkpoint'ов:
@@ -647,8 +741,8 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
 
     train_data, val_data = resolve_data_paths(args)
-    print(f"Train data: {train_data}")
-    print(f"Val data: {val_data}")
+    logger.info("Train data: %s", train_data)
+    logger.info("Val data: %s", val_data)
 
     train_dataset = LiDARDataset(
         train_data,
@@ -670,14 +764,15 @@ def main():
         cache_chunked=args.cache_chunked,
         chunk_size=args.chunk_size,
         class_to_idx=train_dataset.class_to_idx,
+        normalize_stats=train_dataset.normalize_stats,
     )
 
     if args.cache_only:
-        print("Кэш подготовлен. Завершение без обучения (--cache_only).")
+        logger.info("Кэш подготовлен. Завершение без обучения (--cache_only).")
         return
 
     num_classes = train_dataset.num_classes if args.num_classes is None else args.num_classes
-    print(f"Количество классов: {num_classes}")
+    logger.info("Количество классов: %s", num_classes)
     class_weights = compute_class_weights(
         train_dataset,
         num_classes=num_classes,
@@ -687,8 +782,8 @@ def main():
     )
     if class_weights is not None:
         class_weights = class_weights.to(device)
-        print(f"Включена балансировка классов: {args.class_balance}")
-        print(f"Class weights: {class_weights.detach().cpu().numpy()}")
+        logger.info("Включена балансировка классов: %s", args.class_balance)
+        logger.info("Class weights: %s", class_weights.detach().cpu().numpy())
 
     train_loader_kwargs = {
         "batch_size": args.batch_size,
@@ -743,17 +838,25 @@ def main():
         attention_heads=args.attention_heads,
         attention_dropout=args.attention_dropout,
     ).to(device)
-    print(f"Используется модель: {args.model} ({args.task})")
-    print(f"Параметров: {sum(p.numel() for p in model.parameters()):,}")
+    logger.info("Используется модель: %s (%s)", args.model, args.task)
+    logger.info("Параметров: %s", f"{sum(p.numel() for p in model.parameters()):,}")
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
+    if args.lr_scheduler == "cosine":
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epochs, eta_min=args.lr * 0.01
+        )
+        logger.info("LR scheduler: CosineAnnealingLR (T_max=%d, eta_min=%.2e)", args.epochs, args.lr * 0.01)
+    else:
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
+        logger.info("LR scheduler: StepLR (step_size=20, gamma=0.7)")
 
     start_epoch = 0
-    best_val_iou = 0
+    best_val_metric = 0
+    best_val_per_class_iou = None
 
     if args.resume:
-        print(f"Загрузка чекпоинта из {args.resume}")
+        logger.info("Загрузка чекпоинта из %s", args.resume)
         checkpoint = torch.load(args.resume, weights_only=False)
         checkpoint_model_type = checkpoint.get("model_type", args.model)
         checkpoint_task = checkpoint.get("task", args.task)
@@ -762,24 +865,48 @@ def main():
         checkpoint_k_small = checkpoint.get("k_small", args.k_small)
         checkpoint_k_large = checkpoint.get("k_large", args.k_large)
         if checkpoint_model_type != args.model:
-            print(f"Предупреждение: модель в чекпоинте ({checkpoint_model_type}) не совпадает с аргументом ({args.model})")
+            logger.warning(
+                "Модель в чекпоинте (%s) не совпадает с аргументом (%s)",
+                checkpoint_model_type,
+                args.model,
+            )
         if checkpoint_task != args.task:
-            print(f"Предупреждение: task в чекпоинте ({checkpoint_task}) не совпадает с аргументом ({args.task})")
+            logger.warning(
+                "Task в чекпоинте (%s) не совпадает с аргументом (%s)",
+                checkpoint_task,
+                args.task,
+            )
         if checkpoint_attention_type != args.attention_type:
-            print(
-                "Предупреждение: attention_type в чекпоинте "
-                f"({checkpoint_attention_type}) не совпадает с аргументом ({args.attention_type})"
+            logger.warning(
+                "attention_type в чекпоинте (%s) не совпадает с аргументом (%s)",
+                checkpoint_attention_type,
+                args.attention_type,
             )
         if checkpoint_k != args.k or checkpoint_k_small != args.k_small or checkpoint_k_large != args.k_large:
-            print(
-                "Предупреждение: параметры графа в чекпоинте не совпадают с аргументами запуска "
-                f"(checkpoint: k={checkpoint_k}, k_small={checkpoint_k_small}, k_large={checkpoint_k_large}; "
-                f"args: k={args.k}, k_small={args.k_small}, k_large={args.k_large})"
+            logger.warning(
+                "Параметры графа в чекпоинте не совпадают с аргументами "
+                "(checkpoint: k=%s, k_small=%s, k_large=%s; args: k=%s, k_small=%s, k_large=%s)",
+                checkpoint_k,
+                checkpoint_k_small,
+                checkpoint_k_large,
+                args.k,
+                args.k_small,
+                args.k_large,
             )
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if "scheduler_state_dict" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            logger.info("Scheduler восстановлен из чекпоинта (last_epoch=%s)", scheduler.last_epoch)
+        else:
+            # Чекпоинт старого формата: вручную прокручиваем scheduler до нужной эпохи.
+            resumed_epoch = checkpoint.get("epoch", 0)
+            for _ in range(resumed_epoch):
+                scheduler.step()
+            logger.info("Scheduler восстановлен вручную (эпоха %s)", resumed_epoch)
         start_epoch = checkpoint["epoch"]
-        best_val_iou = checkpoint.get("best_val_iou", 0)
+        # Поддержка старых чекпоинтов, где ключ назывался best_val_iou.
+        best_val_metric = checkpoint.get("best_val_metric", checkpoint.get("best_val_iou", 0))
 
     use_amp = bool(args.amp and device.type == "cuda")
     scaler = make_scaler(use_amp)
@@ -787,6 +914,11 @@ def main():
     mlflow.set_experiment(args.experiment_name)
     run_name = build_train_run_name(args)
     with mlflow.start_run(run_name=run_name):
+        class_weights_list = (
+            [float(x) for x in class_weights.detach().cpu().numpy().tolist()]
+            if class_weights is not None
+            else None
+        )
         mlflow.log_params(
             {
                 "model": args.model,
@@ -797,6 +929,7 @@ def main():
                 "batch_size": args.batch_size,
                 "epochs": args.epochs,
                 "lr": args.lr,
+                "lr_scheduler": args.lr_scheduler,
                 "num_classes": num_classes,
                 "num_workers": args.num_workers,
                 "seed": args.seed,
@@ -819,16 +952,20 @@ def main():
                 "chunk_size": args.chunk_size,
                 "prefetch_factor": args.prefetch_factor,
                 "persistent_workers": args.persistent_workers,
+                "early_stopping_patience": args.early_stopping_patience,
+                "early_stopping_min_delta": args.early_stopping_min_delta,
                 "run_name": run_name,
             }
         )
+        if class_weights_list is not None:
+            mlflow.log_dict({"class_weights": class_weights_list}, "class_weights.json")
 
-        print("Начало обучения")
+        logger.info("Начало обучения")
         epoch_stats = []
         train_start_ts = time.perf_counter()
+        epochs_without_improvement = 0
         for epoch in range(start_epoch, args.epochs):
-            print(f"\nЭпоха {epoch + 1}/{args.epochs}")
-            print("-" * 50)
+            logger.info("Эпоха %s/%s", epoch + 1, args.epochs)
             epoch_start_ts = time.perf_counter()
             if torch.cuda.is_available():
                 torch.cuda.reset_peak_memory_stats()
@@ -860,6 +997,7 @@ def main():
                 loss_type=args.loss_type,
                 focal_gamma=args.focal_gamma,
                 lambda_reg=args.lambda_reg,
+                val_dataset=val_dataset,
             )
             scheduler.step()
             epoch_time_sec = float(time.perf_counter() - epoch_start_ts)
@@ -869,17 +1007,19 @@ def main():
                 else 0.0
             )
 
-            print(
-                f"\nTrain - Loss: {train_metrics['loss']:.4f}, "
+            train_msg = (
+                f"Train - Loss: {train_metrics['loss']:.4f}, "
                 f"Accuracy: {train_metrics['accuracy']:.4f}"
                 + (f", mIoU: {train_metrics['mean_iou']:.4f}" if args.task == "segmentation" else "")
             )
-            print(
+            val_msg = (
                 f"Val   - Loss: {val_metrics['loss']:.4f}, "
                 f"Accuracy: {val_metrics['accuracy']:.4f}"
                 + (f", mIoU: {val_metrics['mean_iou']:.4f}" if args.task == "segmentation" else "")
             )
-            print(f"Epoch time: {epoch_time_sec:.2f}s | Peak VRAM: {peak_vram_mb:.1f} MB")
+            logger.info(train_msg)
+            logger.info(val_msg)
+            logger.info("Epoch time: %.2fs | Peak VRAM: %.1f MB", epoch_time_sec, peak_vram_mb)
 
             # MLflow metrics
             mlflow.log_metric("train_loss", train_metrics["loss"], step=epoch)
@@ -889,6 +1029,10 @@ def main():
             if args.task == "segmentation":
                 mlflow.log_metric("train_miou", train_metrics["mean_iou"], step=epoch)
                 mlflow.log_metric("val_miou", val_metrics["mean_iou"], step=epoch)
+                # Per-class IoU — ключевой сигнал для свипа class_balance_beta:
+                # общий mIoU может меняться слабо, а IoU редких классов — сильно.
+                for ci, iou_c in enumerate(val_metrics.get("per_class_iou", []) or []):
+                    mlflow.log_metric(f"val_iou_c{ci}", float(iou_c), step=epoch)
             mlflow.log_metric("epoch_time_sec", epoch_time_sec, step=epoch)
             mlflow.log_metric("peak_vram_mb", peak_vram_mb, step=epoch)
 
@@ -904,6 +1048,8 @@ def main():
             if args.task == "segmentation":
                 epoch_row["train_miou"] = float(train_metrics["mean_iou"])
                 epoch_row["val_miou"] = float(val_metrics["mean_iou"])
+                epoch_row["train_per_class_iou"] = [float(x) for x in train_metrics.get("per_class_iou", []) or []]
+                epoch_row["val_per_class_iou"] = [float(x) for x in val_metrics.get("per_class_iou", []) or []]
             epoch_stats.append(epoch_row)
 
             # Сохраняем лучшую модель по целевой метрике:
@@ -913,13 +1059,21 @@ def main():
             else:
                 metric_for_best = val_metrics["accuracy"]
 
-            if metric_for_best > best_val_iou:
-                best_val_iou = metric_for_best
+            improved = metric_for_best > (best_val_metric + args.early_stopping_min_delta)
+            if improved:
+                best_val_metric = metric_for_best
+                epochs_without_improvement = 0
+                best_val_per_class_iou = (
+                    [float(x) for x in val_metrics.get("per_class_iou", []) or []]
+                    if args.task == "segmentation"
+                    else None
+                )
                 checkpoint = {
                     "epoch": epoch + 1,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
-                    "best_val_iou": best_val_iou,
+                    "scheduler_state_dict": scheduler.state_dict(),
+                    "best_val_metric": best_val_metric,
                     "num_classes": num_classes,
                     "num_features": num_features,
                     "model_type": args.model,
@@ -935,22 +1089,27 @@ def main():
                     "focal_gamma": args.focal_gamma,
                     "class_balance": args.class_balance,
                     "class_balance_beta": args.class_balance_beta,
+                    "lr_scheduler": args.lr_scheduler,
                     "class_to_idx": train_dataset.class_to_idx,
                     "idx_to_class": train_dataset.idx_to_class,
+                    "normalize_stats": train_dataset.normalize_stats,
                     "train_metrics": train_metrics,
                     "val_metrics": val_metrics,
                 }
                 best_path = os.path.join(args.save_dir, "best_model.pth")
                 torch.save(checkpoint, best_path)
                 mlflow.log_artifact(best_path)
-                print(f"Сохранена лучшая модель: {best_path}")
+                logger.info("Сохранена лучшая модель: %s", best_path)
+            else:
+                epochs_without_improvement += 1
 
             # Сохранение последнего чекпоинта
             checkpoint = {
                 "epoch": epoch + 1,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
-                "best_val_iou": best_val_iou,
+                "scheduler_state_dict": scheduler.state_dict(),
+                "best_val_metric": best_val_metric,
                 "num_classes": num_classes,
                 "num_features": num_features,
                 "model_type": args.model,
@@ -968,9 +1127,19 @@ def main():
                 "class_balance_beta": args.class_balance_beta,
                 "class_to_idx": train_dataset.class_to_idx,
                 "idx_to_class": train_dataset.idx_to_class,
+                "normalize_stats": train_dataset.normalize_stats,
             }
             last_path = os.path.join(args.save_dir, "last_checkpoint.pth")
             torch.save(checkpoint, last_path)
+
+            if args.early_stopping_patience > 0 and epochs_without_improvement >= args.early_stopping_patience:
+                logger.info(
+                    "Early stopping: %s эпох без улучшения (min_delta=%s). Остановка на эпохе %s.",
+                    epochs_without_improvement,
+                    args.early_stopping_min_delta,
+                    epoch + 1,
+                )
+                break
 
         if args.metrics_json_path:
             metrics_path = Path(args.metrics_json_path)
@@ -989,24 +1158,36 @@ def main():
                     best_epoch = max(epoch_stats, key=lambda r: r["val_miou"])["epoch"]
                 else:
                     best_epoch = max(epoch_stats, key=lambda r: r["val_accuracy"])["epoch"]
+            # Сохраняем веса классов и названия классов — это критично для
+            # интерпретации per_class_iou в свипе class_balance_beta.
+            idx_to_class_map = {
+                int(k): str(v) for k, v in getattr(train_dataset, "idx_to_class", {}).items()
+            }
             payload = {
                 "run_name": run_name,
                 "model": args.model,
                 "task": args.task,
                 "dataset": args.dataset,
                 "epochs": args.epochs,
+                "epochs_completed": len(epoch_stats),
+                "stopped_early": len(epoch_stats) < max(0, args.epochs - start_epoch),
                 "batch_size": args.batch_size,
                 "num_points": args.num_points,
                 "amp": use_amp,
                 "seed": args.seed,
                 "num_workers": args.num_workers,
+                "class_balance": args.class_balance,
+                "class_balance_beta": args.class_balance_beta,
+                "lr_scheduler": args.lr_scheduler,
+                "class_weights": class_weights_list,
+                "idx_to_class": idx_to_class_map,
                 "train_drop_last": bool(getattr(train_loader, "drop_last", False)),
                 "train_dataset_size": train_dataset_size,
                 "train_items_per_epoch": train_items_per_epoch,
                 "train_steps_per_epoch": int(len(train_loader)),
                 "effective_drop_ratio": effective_drop_ratio,
                 "total_train_time_sec": total_train_time_sec,
-                "best_val_metric": float(best_val_iou),
+                "best_val_metric": float(best_val_metric),
                 "best_epoch": int(best_epoch),
                 "max_peak_vram_mb": float(max((r["peak_vram_mb"] for r in epoch_stats), default=0.0)),
                 "mean_epoch_time_sec": float(np.mean([r["epoch_time_sec"] for r in epoch_stats])) if epoch_stats else 0.0,
@@ -1017,15 +1198,24 @@ def main():
                 "epoch_stats": epoch_stats,
             }
             if args.task == "segmentation":
-                payload["best_val_miou"] = float(best_val_iou)
+                payload["best_val_miou"] = float(best_val_metric)
                 payload["final_train_miou"] = float(epoch_stats[-1]["train_miou"]) if epoch_stats else None
                 payload["final_val_miou"] = float(epoch_stats[-1]["val_miou"]) if epoch_stats else None
+                payload["final_train_per_class_iou"] = (
+                    list(epoch_stats[-1].get("train_per_class_iou", [])) if epoch_stats else None
+                )
+                payload["final_val_per_class_iou"] = (
+                    list(epoch_stats[-1].get("val_per_class_iou", [])) if epoch_stats else None
+                )
+                payload["best_val_per_class_iou"] = (
+                    list(best_val_per_class_iou) if best_val_per_class_iou is not None else None
+                )
             else:
-                payload["best_val_accuracy"] = float(best_val_iou)
+                payload["best_val_accuracy"] = float(best_val_metric)
 
             with metrics_path.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
-            print(f"Сохранены метрики запуска: {metrics_path}")
+            logger.info("Сохранены метрики запуска: %s", metrics_path)
 
 
 if __name__ == "__main__":
