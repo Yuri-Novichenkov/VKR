@@ -485,6 +485,7 @@ class LiDARDataset(Dataset):
             "class_to_idx": {str(k): int(v) for k, v in self.class_to_idx.items()},
             "idx_to_class": {str(k): int(v) for k, v in self.idx_to_class.items()},
             "num_classes": int(self.num_classes),
+            "normalize_stats": self.normalize_stats,
         }
         np.savez(
             cache_path,
@@ -508,6 +509,10 @@ class LiDARDataset(Dataset):
         self.class_to_idx = {int(k): int(v) for k, v in metadata.get("class_to_idx", {}).items()}
         self.idx_to_class = {int(k): int(v) for k, v in metadata.get("idx_to_class", {}).items()}
         self.num_classes = int(metadata.get("num_classes", 1))
+        self.normalize_stats = metadata.get("normalize_stats", {})
+        if not self.normalize_stats:
+            print("Предупреждение: normalize_stats отсутствуют в кэше (старый формат). "
+                  "Нормализация применена к данным при записи кэша неизвестными параметрами.")
 
         print(f"Кэш загружен. Используемые признаки: {self.use_features}")
 
@@ -544,6 +549,7 @@ class LiDARDataset(Dataset):
             "class_to_idx": {str(k): int(v) for k, v in self.class_to_idx.items()},
             "idx_to_class": {str(k): int(v) for k, v in self.idx_to_class.items()},
             "num_classes": int(self.num_classes),
+            "normalize_stats": self.normalize_stats,
         }
         chunk_manifest.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"Кэш чанков сохранен: {chunk_manifest}")
@@ -562,6 +568,10 @@ class LiDARDataset(Dataset):
         self.class_to_idx = {int(k): int(v) for k, v in metadata.get("class_to_idx", {}).items()}
         self.idx_to_class = {int(k): int(v) for k, v in metadata.get("idx_to_class", {}).items()}
         self.num_classes = int(metadata.get("num_classes", 1))
+        self.normalize_stats = metadata.get("normalize_stats", {})
+        if not self.normalize_stats:
+            print("Предупреждение: normalize_stats отсутствуют в кэше чанков (старый формат). "
+                  "Нормализация применена к данным при записи кэша неизвестными параметрами.")
         self.features = None
         self.labels = None
         print(f"Кэш чанков загружен. Используемые признаки: {self.use_features}")
