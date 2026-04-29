@@ -11,6 +11,16 @@ import torch.nn.functional as F
 from ..utils.point_ops import get_graph_feature, EdgeConv, knn
 
 
+def _xyz_graph_idx(x, k):
+    """
+    kNN на первом слое должен строиться по геометрии (XYZ), а не по всем
+    входным каналам (RGB/Intensity/returns). Иначе близкими «соседями»
+    становятся точки с похожим цветом/интенсивностью из других частей сцены,
+    что ломает локальность.
+    """
+    return knn(x[:, :3, :].contiguous(), k=k)
+
+
 class DGCNNSegmentation(nn.Module):
     """
     DGCNN для семантической сегментации.
@@ -20,7 +30,7 @@ class DGCNNSegmentation(nn.Module):
     2) конкатенация multi-level признаков;
     3) point-wise классификатор.
     """
-    def __init__(self, num_classes, num_features=9, k=20, emb_dims=1024, dropout=0.5):
+    def __init__(self, num_classes, num_features=9, k=20, dropout=0.5):
         super().__init__()
         self.k = k
         self.num_classes = num_classes
@@ -48,7 +58,10 @@ class DGCNNSegmentation(nn.Module):
         # x: (B, N, F) -> (B, F, N), далее строим граф соседства по точкам.
         x = x.transpose(2, 1).contiguous()  # (B, F, N)
 
-        x1 = self.ec1(get_graph_feature(x, k=self.k))
+        # Первый слой — геометрический граф по XYZ; дальше — dynamic graph
+        # в пространстве выученных фичей (стандарт DGCNN).
+        idx_xyz = _xyz_graph_idx(x, k=self.k)
+        x1 = self.ec1(get_graph_feature(x, k=self.k, idx=idx_xyz))
         x2 = self.ec2(get_graph_feature(x1, k=self.k))
         x3 = self.ec3(get_graph_feature(x2, k=self.k))
         x4 = self.ec4(get_graph_feature(x3, k=self.k))
@@ -104,7 +117,9 @@ class DGCNNClassification(nn.Module):
         # x: (B, N, F)
         x = x.transpose(2, 1).contiguous()  # (B, F, N)
 
-        x1 = self.ec1(get_graph_feature(x, k=self.k))
+        # Первый слой — геометрический kNN (XYZ), дальше — dynamic graph.
+        idx_xyz = _xyz_graph_idx(x, k=self.k)
+        x1 = self.ec1(get_graph_feature(x, k=self.k, idx=idx_xyz))
         x2 = self.ec2(get_graph_feature(x1, k=self.k))
         x3 = self.ec3(get_graph_feature(x2, k=self.k))
         x4 = self.ec4(get_graph_feature(x3, k=self.k))

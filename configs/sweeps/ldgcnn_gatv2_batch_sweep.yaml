@@ -3,7 +3,7 @@ run_group: ldgcnn_e1_gatv2_mar16
 model: ldgcnn
 task: segmentation
 dataset: Mar16
-batch_sizes: [2 ,4, 6, 8]
+batch_sizes: [2 ,4, 8, 16, 32]
 
 # Аргументы, общие для всех запусков в sweep.
 common_args:

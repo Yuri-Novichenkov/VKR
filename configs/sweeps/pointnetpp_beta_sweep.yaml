@@ -1,0 +1,27 @@
+experiment_name: VKR_BetaSweep
+run_group: pointnetpp_mar16_beta
+model: pointnet++
+task: segmentation
+dataset: Mar16
+# Ось свипа — beta параметра Class-Balanced Loss (Cui et al.):
+#   w_c = (1 - beta) / (1 - beta^n_c).
+# beta = 0.0   -> равные веса (эквивалент class_balance=none).
+# beta -> 1.0  -> приближается к inverse frequency.
+class_balance_betas: [0.0, 0.9, 0.99, 0.999, 0.9999, 0.99999]
+
+common_args:
+  epochs: 30
+  num_points: 4096
+  batch_size: 16   # лучший bs из new batch-свипа для pointnet++
+  lr: 0.0003
+  amp: false       # PointNet++ на текущем окружении даёт NaN с AMP в beta-sweep
+  seed: 42
+  deterministic: false
+  cache_dir: cache
+  cache_mode: read
+  cache_chunked: true
+  chunk_size: 512
+  num_workers: 0
+  class_balance: effective
+
+train_args: {}

@@ -1,0 +1,33 @@
+experiment_name: VKR_BetaSweep
+run_group: ldgcnn_e3_none_mar16_beta
+model: ldgcnn
+task: segmentation
+dataset: Mar16
+# Ось свипа — beta параметра Class-Balanced Loss (Cui et al.):
+#   w_c = (1 - beta) / (1 - beta^n_c).
+# beta = 0.0   -> равные веса (эквивалент class_balance=none).
+# beta -> 1.0  -> приближается к inverse frequency.
+class_balance_betas: [0.0, 0.9, 0.99, 0.999, 0.9999, 0.99999]
+
+common_args:
+  epochs: 30
+  num_points: 2048
+  batch_size: 16   # лучший bs из new batch-свипа для ldgcnn_e3_none
+  lr: 0.0008
+  amp: true
+  seed: 42
+  deterministic: false
+  cache_dir: cache
+  cache_mode: read
+  cache_chunked: true
+  chunk_size: 512
+  num_workers: 0
+  class_balance: effective
+  k_small: 20
+  k_large: 40
+  attention_type: none
+  attention_k: 16
+  attention_heads: 4
+  attention_dropout: 0.1
+
+train_args: {}

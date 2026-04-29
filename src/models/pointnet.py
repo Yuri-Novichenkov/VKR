@@ -33,8 +33,9 @@ class TNet(nn.Module):
         self.bn2 = nn.BatchNorm1d(128)
         self.bn3 = nn.BatchNorm1d(1024)
 
-        self.bn4 = nn.LayerNorm(512)
-        self.bn5 = nn.LayerNorm(256)
+        # Именуем ln (LayerNorm), а не bn (BatchNorm), чтобы избежать путаницы.
+        self.ln4 = nn.LayerNorm(512)
+        self.ln5 = nn.LayerNorm(256)
         
         self.register_buffer('identity', torch.eye(k).unsqueeze(0))
         
@@ -57,8 +58,8 @@ class TNet(nn.Module):
         x = x.view(batch_size, -1)
         
         # Полносвязные слои
-        x = F.relu(self.bn4(self.fc1(x)))
-        x = F.relu(self.bn5(self.fc2(x)))
+        x = F.relu(self.ln4(self.fc1(x)))
+        x = F.relu(self.ln5(self.fc2(x)))
         x = self.fc3(x)
         
         # Формирование матрицы трансформации

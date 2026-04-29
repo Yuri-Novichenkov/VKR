@@ -129,12 +129,14 @@ class _MultiScaleEdgeConv(nn.Module):
             nn.LeakyReLU(negative_slope=0.2),
         )
 
-    def forward(self, x):
+    def forward(self, x, idx_small=None, idx_large=None):
         # x: (B, C, N)
         # Две окрестности разного масштаба помогают одновременно
         # захватывать локальные и более "широкие" контексты.
-        x_small = self.ec_small(get_graph_feature(x, k=self.k_small))
-        x_large = self.ec_large(get_graph_feature(x, k=self.k_large))
+        # На первом слое idx_small/idx_large передаются явно (kNN по XYZ),
+        # чтобы граф строился по геометрии, а не по RGB/Intensity.
+        x_small = self.ec_small(get_graph_feature(x, k=self.k_small, idx=idx_small))
+        x_large = self.ec_large(get_graph_feature(x, k=self.k_large, idx=idx_large))
         x = torch.cat([x_small, x_large], dim=1)
         x = self.fuse(x)
         return x
@@ -190,7 +192,12 @@ class LDGCNNSegmentation(nn.Module):
     def forward(self, x):
         x = x.transpose(2, 1).contiguous()  # (B, F, N)
 
-        x1 = self.ec1(x)
+        # Первый слой — геометрический граф по XYZ, оба масштаба соседей;
+        # дальше — dynamic graph в пространстве выученных фичей.
+        xyz = x[:, :3, :].contiguous()
+        idx_small = knn(xyz, k=self.ec1.k_small)
+        idx_large = knn(xyz, k=self.ec1.k_large)
+        x1 = self.ec1(x, idx_small=idx_small, idx_large=idx_large)
         x2 = self.ec2(x1)
         if self.attention is not None:
             # Внимание считается по локальной kNN-окрестности текущих признаков.
@@ -267,7 +274,11 @@ class LDGCNNClassification(nn.Module):
     def forward(self, x):
         x = x.transpose(2, 1).contiguous()
 
-        x1 = self.ec1(x)
+        # Первый слой — геометрический граф по XYZ, дальше — dynamic graph.
+        xyz = x[:, :3, :].contiguous()
+        idx_small = knn(xyz, k=self.ec1.k_small)
+        idx_large = knn(xyz, k=self.ec1.k_large)
+        x1 = self.ec1(x, idx_small=idx_small, idx_large=idx_large)
         x2 = self.ec2(x1)
         if self.attention is not None:
             k_local = min(self.attention_k, x2.shape[-1])

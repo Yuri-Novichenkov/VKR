@@ -173,13 +173,13 @@ python scripts/train.py --dataset Mar16 --num_points 4096 --cache_dir cache --ca
 ```
 **Для визуализации файлов:**
 ```bash
-python scripts/vizualization.py --data Files/Mar16/LiDAR/Mar16_test.txt --predictions predictions\pointnet\Mar16_test_GroundTruth\Mar16_test_GroundTruth_predictions.txt --color_by pred --max_points 1000000
+python scripts/visualization.py --data Files/Mar16/LiDAR/Mar16_test.txt --predictions predictions\pointnet\Mar16_test_GroundTruth\Mar16_test_GroundTruth_predictions.txt --color_by pred --max_points 1000000
 ```
 ```bash
-python scripts/vizualization.py --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --color_by gt --max_points 1000000
+python scripts/visualization.py --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --color_by gt --max_points 1000000
 ```
 ```bash
-python scripts/vizualization.py --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --color_by rgb --max_points 1000000
+python scripts/visualization.py --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --color_by rgb --max_points 1000000
 ```
 
 ### Параметры обучения
@@ -382,3 +382,261 @@ VRAM берётся из PyTorch (`torch.cuda.max_memory_allocated`) и пише
 ## Автор
 
 Новиченков Ю. Д. - ВКР 2025-2026
+
+---
+
+## Эксперимент: функции потерь (Loss Function Sweep)
+
+Сравниваем 5 конфигураций функции потерь на всех 6 моделях (30 запусков).  
+Эксперимент: `VKR_LossSweep`. Датасет: Mar16. 100 эпох, 4096 точек, batch=4, AMP.
+
+### Установка Lovász-Softmax
+
+```bash
+pip install git+https://github.com/bermanmaxim/LovaszSoftmax.git
+# или (PyPI, если доступен):
+pip install lovasz-losses
+```
+
+### Конфигурации
+
+| # | loss_type | class_balance | beta | Описание |
+|---|-----------|--------------|------|----------|
+| A | `ce` | none | — | Baseline CE |
+| B | `ce` | effective | 0.99999 | CE + CB-Loss |
+| C | `focal` | none | — | Focal Loss γ=2 |
+| D | `focal` | effective | 0.99999 | Focal + CB-Loss |
+| E | `lovasz` | effective | 0.99999 | Lovász + CB-Loss |
+
+> **Конфиг B уже выполнен** в рамках VKR_Final_100ep. Можно брать оттуда чекпоинты.
+
+---
+
+### PointNet — все конфигурации
+
+```bash
+# A — CE baseline
+python scripts/train.py --model pointnet --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --loss_type ce --seed 42
+
+# B — CE + CB-Loss (уже есть в VKR_Final_100ep, повторять не обязательно)
+python scripts/train.py --model pointnet --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# C — Focal Loss
+python scripts/train.py --model pointnet --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --loss_type focal --focal_gamma 2.0 --seed 42
+
+# D — Focal + CB-Loss
+python scripts/train.py --model pointnet --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# E — Lovász + CB-Loss
+python scripts/train.py --model pointnet --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
+```
+
+---
+
+### PointNet++ — все конфигурации
+
+```bash
+# A — CE baseline
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.0003 --lr_scheduler cosine \
+  --loss_type ce --seed 42
+
+# B — CE + CB-Loss
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.0003 --lr_scheduler cosine \
+  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# C — Focal Loss
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.0003 --lr_scheduler cosine \
+  --loss_type focal --focal_gamma 2.0 --seed 42
+
+# D — Focal + CB-Loss
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.0003 --lr_scheduler cosine \
+  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# E — Lovász + CB-Loss
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.0003 --lr_scheduler cosine \
+  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
+```
+
+---
+
+### DGCNN — все конфигурации
+
+```bash
+# A — CE baseline
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --loss_type ce --seed 42
+
+# B — CE + CB-Loss
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# C — Focal Loss
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --loss_type focal --focal_gamma 2.0 --seed 42
+
+# D — Focal + CB-Loss
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# E — Lovász + CB-Loss
+python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
+```
+
+---
+
+### LDGCNN + GATv2 — все конфигурации
+
+```bash
+# A — CE baseline
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type gatv2 --attention_k 16 --attention_heads 4 \
+  --loss_type ce --seed 42
+
+# B — CE + CB-Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type gatv2 --attention_k 16 --attention_heads 4 \
+  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# C — Focal Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type gatv2 --attention_k 16 --attention_heads 4 \
+  --loss_type focal --focal_gamma 2.0 --seed 42
+
+# D — Focal + CB-Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type gatv2 --attention_k 16 --attention_heads 4 \
+  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# E — Lovász + CB-Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type gatv2 --attention_k 16 --attention_heads 4 \
+  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
+```
+
+---
+
+### LDGCNN + LocalWindow — все конфигурации
+
+```bash
+# A — CE baseline
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type local_window --attention_k 16 --attention_heads 4 \
+  --loss_type ce --seed 42
+
+# B — CE + CB-Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type local_window --attention_k 16 --attention_heads 4 \
+  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# C — Focal Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type local_window --attention_k 16 --attention_heads 4 \
+  --loss_type focal --focal_gamma 2.0 --seed 42
+
+# D — Focal + CB-Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type local_window --attention_k 16 --attention_heads 4 \
+  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# E — Lovász + CB-Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type local_window --attention_k 16 --attention_heads 4 \
+  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
+```
+
+---
+
+### LDGCNN (без attention) — все конфигурации
+
+```bash
+# A — CE baseline
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type none \
+  --loss_type ce --seed 42
+
+# B — CE + CB-Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type none \
+  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# C — Focal Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type none \
+  --loss_type focal --focal_gamma 2.0 --seed 42
+
+# D — Focal + CB-Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type none \
+  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
+
+# E — Lovász + CB-Loss
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
+  --k_small 20 --k_large 40 --attention_type none \
+  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
+```

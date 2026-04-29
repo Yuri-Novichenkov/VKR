@@ -1,0 +1,129 @@
+# =============================================================================
+# Лучшие гиперпараметры по результатам экспериментов (датасет Mar16)
+#
+# Источники:
+#   batch_size    → experiments/batch_size/
+#   class_balance → experiments/class_balance_beta/
+#   loss_type     → experiments/loss_sweep/
+#
+# Используй этот файл как справочник при обучении финальных моделей.
+# Команды запуска финального обучения — см. README.md, раздел "Финальное обучение".
+# =============================================================================
+
+# Общие параметры, одинаковые для всех моделей
+common:
+  dataset: Mar16
+  task: segmentation
+  num_points: 4096
+  epochs: 100
+  seed: 42
+  lr: 0.001
+  lr_scheduler: cosine
+  cache_mode: read
+  cache_chunked: true
+  chunk_size: 512
+  num_workers: 4
+  deterministic: false
+
+# Лучшие параметры по каждой модели
+models:
+
+  pointnet:
+    # batch_size sweep: лучший bs=16 (mIoU=0.307 @ 100 эпох CE)
+    batch_size: 16
+    amp: true
+    # class_balance_beta sweep: лучший beta=0.99999
+    class_balance: effective
+    class_balance_beta: 0.99999
+    # loss sweep: лучший CE+CB (mIoU=0.4247, epoch=89)
+    loss_type: ce
+    focal_gamma: null
+    # best_val_miou из loss sweep
+    best_val_miou: 0.4247
+
+  pointnet++:
+    # batch_size sweep: лучший bs=16 (mIoU=0.384 @ 100 эпох CE)
+    batch_size: 16
+    lr: 0.0003          # пониженный lr — нестабильность с AMP
+    amp: false          # AMP отключён: NaN при fp16 на наших данных
+    # class_balance_beta sweep: лучший beta=0.0 (без балансировки выиграл)
+    # Однако в loss sweep Lovász+CB (beta=0.99999) дал лучший результат —
+    # выбираем loss sweep как более полный эксперимент
+    class_balance: effective
+    class_balance_beta: 0.99999
+    # loss sweep: лучший Lovász+CB (mIoU=0.4915, epoch=78)
+    loss_type: lovasz
+    focal_gamma: null
+    best_val_miou: 0.4915
+
+  dgcnn:
+    # batch_size sweep: лучший bs=4 (mIoU=0.399 @ 100 эпох CE)
+    batch_size: 4
+    amp: true
+    k: 20
+    # class_balance_beta sweep: лучший beta=0.99999
+    class_balance: effective
+    class_balance_beta: 0.99999
+    # loss sweep: лучший Lovász+CB (mIoU=0.5313, epoch=74)
+    loss_type: lovasz
+    focal_gamma: null
+    best_val_miou: 0.5313
+
+  ldgcnn_none:
+    # batch_size sweep: лучший bs=16 (mIoU=0.435 @ 100 эпох CE)
+    batch_size: 16
+    amp: true
+    k_small: 20
+    k_large: 40
+    attention_type: none
+    # class_balance_beta sweep: лучший beta=0.99999
+    class_balance: effective
+    class_balance_beta: 0.99999
+    # loss sweep: лучший Focal+CB (mIoU=0.5476, epoch=72)
+    loss_type: focal
+    focal_gamma: 2.0
+    best_val_miou: 0.5476
+
+  ldgcnn_gatv2:
+    # batch_size sweep: лучший bs=16 (mIoU=0.435 @ 100 эпох CE)
+    batch_size: 16
+    amp: true
+    k_small: 20
+    k_large: 40
+    attention_type: gatv2
+    attention_k: 16
+    attention_heads: 4
+    attention_dropout: 0.1
+    # class_balance_beta sweep: лучший beta=0.9999
+    class_balance: effective
+    class_balance_beta: 0.9999
+    # loss sweep: лучший CE+CB (mIoU=0.5544, epoch=58) ← абсолютный лидер
+    loss_type: ce
+    focal_gamma: null
+    best_val_miou: 0.5544
+
+  ldgcnn_localwin:
+    # batch_size sweep: лучший bs=16 (mIoU=0.431 @ 100 эпох CE)
+    batch_size: 16
+    amp: true
+    k_small: 20
+    k_large: 40
+    attention_type: local_window
+    attention_k: 16
+    attention_heads: 4
+    attention_dropout: 0.1
+    # class_balance_beta sweep: лучший beta=0.99999
+    class_balance: effective
+    class_balance_beta: 0.99999
+    # loss sweep: лучший Lovász+CB (mIoU=0.5505, epoch=25)
+    loss_type: lovasz
+    focal_gamma: null
+    best_val_miou: 0.5505
+
+# Итоговый рейтинг моделей по best_val_miou (loss sweep, Mar16)
+# 1. ldgcnn_gatv2    → 0.5544  (CE+CB)
+# 2. ldgcnn_localwin → 0.5505  (Lovász+CB)
+# 3. ldgcnn_none     → 0.5476  (Focal+CB)
+# 4. dgcnn           → 0.5313  (Lovász+CB)
+# 5. pointnet++      → 0.4915  (Lovász+CB)
+# 6. pointnet        → 0.4247  (CE+CB)

@@ -3,7 +3,7 @@ run_group: dgcnn_mar16
 model: dgcnn
 task: segmentation
 dataset: Mar16
-batch_sizes: [2, 4, 8, 16, 32]
+batch_sizes: [2, 4, 8, 16, 32, 64, 128]
 
 common_args:
   epochs: 10

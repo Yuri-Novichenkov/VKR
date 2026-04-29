@@ -459,11 +459,10 @@ class LiDARDataset(Dataset):
             return None
 
         key = {
-            # cache_format=4: пространственная нарезка блоков с гарантией
-            # полного покрытия + фиксированный порядок входных каналов
-            # (XYZ первыми). Изменение ломает совместимость со
-            # старыми кэшами, поэтому бампаем версию.
-            "cache_format": 4,
+            # cache_format=5: v4 + normalize_stats в metadata кэша.
+            # Бамп нужен, чтобы старые кэши без train-нормализации не
+            # подхватывались в режиме cache_mode=read/write.
+            "cache_format": 5,
             "data_path": str(self.data_path.resolve()),
             "num_points": int(self.num_points),
             "use_features": use_features,

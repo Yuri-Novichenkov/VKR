@@ -56,6 +56,49 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ── Lovász-Softmax (встроенная реализация, без внешних зависимостей) ──────
+# Berman et al. "The Lovász-Softmax loss", CVPR 2018. arxiv.org/abs/1705.08790
+
+
+def _lovasz_grad(gt_sorted: torch.Tensor) -> torch.Tensor:
+    """Субградиент Ловász-расширения (1 − Jaccard) для одного класса."""
+    p = len(gt_sorted)
+    gts = gt_sorted.sum()
+    intersection = gts - gt_sorted.float().cumsum(0)
+    union = gts + (1.0 - gt_sorted).float().cumsum(0)
+    jaccard = 1.0 - intersection / union
+    if p > 1:
+        jaccard[1:p] = jaccard[1:p] - jaccard[0:-1]
+    return jaccard
+
+
+def _lovasz_softmax_flat(probas: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """Lovász-Softmax по плоским (N, C) вероятностям и (N,) меткам."""
+    losses = []
+    for c in labels.unique():
+        fg = (labels == c).float()
+        errors = (fg - probas[:, c]).abs()
+        errors_sorted, perm = torch.sort(errors, descending=True)
+        losses.append(torch.dot(errors_sorted, _lovasz_grad(fg[perm])))
+    return torch.stack(losses).mean() if losses else probas.sum() * 0.0
+
+
+def lovasz_softmax_loss(probas: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """
+    Lovász-Softmax loss для сегментации облаков точек.
+    Args:
+        probas: (B, C, N) — softmax-вероятности
+        labels: (B, N)    — ground truth метки
+    Returns:
+        скалярный loss, усреднённый по присутствующим классам
+    """
+    B, C, N = probas.shape
+    return _lovasz_softmax_flat(
+        probas.permute(0, 2, 1).reshape(-1, C),
+        labels.reshape(-1),
+    )
+
+
 @contextmanager
 def autocast_context(use_amp):
     if not use_amp:
@@ -167,13 +210,9 @@ def train_epoch(
                         reg_loss = reg_coords + reg_features
                         loss = ce_loss + lambda_reg * reg_loss
                     elif loss_type == "lovasz":
-                        try:
-                            from lovász_losses import lovász_softmax
-                        except (ImportError, ModuleNotFoundError):
-                            from lovasz_losses import lovasz_softmax as lovász_softmax
                         bsz, n_points, n_classes = predictions.shape
                         probs = torch.softmax(predictions, dim=2).permute(0, 2, 1).contiguous()  # (B, C, N)
-                        ce_loss = lovász_softmax(probs, labels, classes="present")
+                        ce_loss = lovasz_softmax_loss(probs, labels)
                         if class_weights is not None:
                             # Вспомогательный взвешенный CE для усиления балансировки
                             flat_p = predictions.reshape(-1, n_classes)
@@ -221,13 +260,9 @@ def train_epoch(
                         loss = ce_loss
                         reg_loss = torch.tensor(0.0, device=predictions.device)
                     elif loss_type == "lovasz":
-                        try:
-                            from lovász_losses import lovász_softmax
-                        except (ImportError, ModuleNotFoundError):
-                            from lovasz_losses import lovasz_softmax as lovász_softmax
                         bsz, n_points, n_classes = predictions.shape
                         probs = torch.softmax(predictions, dim=2).permute(0, 2, 1).contiguous()  # (B, C, N)
-                        ce_loss = lovász_softmax(probs, labels, classes="present")
+                        ce_loss = lovasz_softmax_loss(probs, labels)
                         if class_weights is not None:
                             flat_p = predictions.reshape(-1, n_classes)
                             flat_l = labels.reshape(-1)
@@ -395,13 +430,9 @@ def validate(
                             reg_loss = reg_coords + reg_features
                             loss = ce_loss + lambda_reg * reg_loss
                         elif loss_type == "lovasz":
-                            try:
-                                from lovász_losses import lovász_softmax
-                            except (ImportError, ModuleNotFoundError):
-                                from lovasz_losses import lovasz_softmax as lovász_softmax
                             bsz, n_points, n_classes = predictions.shape
                             probs = torch.softmax(predictions, dim=2).permute(0, 2, 1).contiguous()  # (B, C, N)
-                            ce_loss = lovász_softmax(probs, labels, classes="present")
+                            ce_loss = lovasz_softmax_loss(probs, labels)
                             if class_weights is not None:
                                 flat_p = predictions.reshape(-1, n_classes)
                                 flat_l = labels.reshape(-1)
@@ -448,13 +479,9 @@ def validate(
                             loss = ce_loss
                             reg_loss = torch.tensor(0.0, device=predictions.device)
                         elif loss_type == "lovasz":
-                            try:
-                                from lovász_losses import lovász_softmax
-                            except (ImportError, ModuleNotFoundError):
-                                from lovasz_losses import lovasz_softmax as lovász_softmax
                             bsz, n_points, n_classes = predictions.shape
                             probs = torch.softmax(predictions, dim=2).permute(0, 2, 1).contiguous()  # (B, C, N)
-                            ce_loss = lovász_softmax(probs, labels, classes="present")
+                            ce_loss = lovasz_softmax_loss(probs, labels)
                             if class_weights is not None:
                                 flat_p = predictions.reshape(-1, n_classes)
                                 flat_l = labels.reshape(-1)
@@ -636,6 +663,13 @@ def main():
     parser.add_argument("--num_classes", type=int, default=None, help="Количество классов")
     parser.add_argument("--lambda_reg", type=float, default=0.001, help="Коэффициент регуляризации трансформаций")
     parser.add_argument("--save_dir", type=str, default="checkpoints", help="Директория для сохранения моделей")
+    parser.add_argument(
+        "--checkpoints_root",
+        type=str,
+        default=None,
+        help="Альтернативный корень для чекпоинтов (применяется авто-именование модель/задача/вариант/датасет). "
+             "Используй чтобы изолировать эксперименты от базовых чекпоинтов.",
+    )
     parser.add_argument("--resume", type=str, default=None, help="Путь к чекпоинту для возобновления обучения")
     parser.add_argument("--model", type=str, default="pointnet", choices=["pointnet", "pointnet++", "dgcnn", "ldgcnn"], help="Модель")
     parser.add_argument("--task", type=str, default="segmentation", choices=["segmentation", "classification"], help="Задача")
@@ -719,7 +753,12 @@ def main():
     # checkpoints/<model>/<task>/<variant>/<dataset>/...
     # variant формируется из активных режимов (attention/loss/class_balance),
     # чтобы эксперименты не перезаписывали друг друга.
-    if args.save_dir == "checkpoints":
+    # Если задан --checkpoints_root, используем его как базу для авто-именования
+    # вместо --save_dir. Это позволяет изолировать разные эксперименты.
+    _ckpt_base = args.checkpoints_root if args.checkpoints_root else args.save_dir
+    if _ckpt_base == args.save_dir or args.checkpoints_root is not None:
+        args.save_dir = _ckpt_base
+    if args.checkpoints_root is not None or args.save_dir == "checkpoints":
         variant_parts = []
         if args.model == "ldgcnn" and args.attention_type != "none":
             attn_dropout_str = str(args.attention_dropout).replace(".", "p")
@@ -735,9 +774,9 @@ def main():
 
         if variant_parts:
             variant = "__".join(variant_parts)
-            args.save_dir = os.path.join(args.save_dir, args.model, args.task, variant, args.dataset.lower())
+            args.save_dir = os.path.join(_ckpt_base, args.model, args.task, variant, args.dataset.lower())
         else:
-            args.save_dir = os.path.join(args.save_dir, args.model, args.task, args.dataset.lower())
+            args.save_dir = os.path.join(_ckpt_base, args.model, args.task, args.dataset.lower())
     os.makedirs(args.save_dir, exist_ok=True)
 
     train_data, val_data = resolve_data_paths(args)
@@ -1200,22 +1239,21 @@ def main():
             if args.task == "segmentation":
                 payload["best_val_miou"] = float(best_val_metric)
                 payload["final_train_miou"] = float(epoch_stats[-1]["train_miou"]) if epoch_stats else None
+     
                 payload["final_val_miou"] = float(epoch_stats[-1]["val_miou"]) if epoch_stats else None
-                payload["final_train_per_class_iou"] = (
-                    list(epoch_stats[-1].get("train_per_class_iou", [])) if epoch_stats else None
-                )
-                payload["final_val_per_class_iou"] = (
-                    list(epoch_stats[-1].get("val_per_class_iou", [])) if epoch_stats else None
-                )
-                payload["best_val_per_class_iou"] = (
-                    list(best_val_per_class_iou) if best_val_per_class_iou is not None else None
-                )
-            else:
-                payload["best_val_accuracy"] = float(best_val_metric)
-
+                payload["best_val_per_class_iou"] = best_val_per_class_iou
             with metrics_path.open("w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-            logger.info("Сохранены метрики запуска: %s", metrics_path)
+                json.dump(payload, f, indent=2)
+            logger.info("Метрики сохранены: %s", metrics_path)
+
+        mlflow.log_metric("best_val_metric", best_val_metric)
+        if best_val_per_class_iou:
+            mlflow.log_dict(
+                {"best_val_per_class_iou": best_val_per_class_iou},
+                "best_val_per_class_iou.json",
+            )
+
+    logger.info("Обучение завершено. Лучшая val-метрика: %.4f", best_val_metric)
 
 
 if __name__ == "__main__":

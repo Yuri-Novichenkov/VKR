@@ -3,13 +3,13 @@ run_group: pointnetpp_mar16
 model: pointnet++
 task: segmentation
 dataset: Mar16
-batch_sizes: [4, 8, 16, 32, 64, 128]
+batch_sizes: [4, 8, 16, 32, 64, 128, 256]
 
 common_args:
   epochs: 10
   num_points: 4096
   lr: 0.0005
-  amp: true
+  amp: false
   seed: 42
   deterministic: false
   cache_dir: cache

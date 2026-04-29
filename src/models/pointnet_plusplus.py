@@ -229,6 +229,9 @@ class PointNetFeaturePropagation(nn.Module):
             interpolated_points = points2.repeat(1, N, 1)
         else:
             dists = square_distance(xyz1, xyz2)
+            # square_distance может давать слегка отрицательные значения
+            # из-за ошибок округления matmul в fp16/fp32.
+            dists = dists.clamp_min(0.0)
             dists, idx = dists.sort(dim=-1)
             dists, idx = dists[:, :, :3], idx[:, :, :3]  # Берем 3 ближайшие точки
 
@@ -274,10 +277,16 @@ class PointNetPlusPlusSegmentation(nn.Module):
         else:
             additional_channel = 0
         
-        # Encoder 
+        # Encoder
+        # ВАЖНО: радиусы 0.2 / 0.4 (стандартные значения из оригинальной статьи
+        # PointNet++) рассчитаны на блоки, нормализованные в единичный шар
+        # (max |x| <= 1). Это гарантируется per-block нормализацией в
+        # LiDARDataset.__getitem__. Если нормализация отключена, радиусы нужно
+        # пересчитывать под реальный масштаб данных, иначе ball query
+        # возвращает слишком мало точек и модель деградирует.
         # sa1: в sample_and_group объединяются grouped_xyz_norm (3) + features (num_features - 3)
         feature_dim = (num_features - 3) if num_features > 3 else 0
-        self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, 
+        self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32,
                                          in_channel=3 + feature_dim,  # 3 координаты + признаки
                                          mlp=[64, 64, 128])
         self.sa2 = PointNetSetAbstraction(npoint=128, radius=0.4, nsample=64,
