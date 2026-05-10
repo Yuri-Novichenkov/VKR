@@ -63,9 +63,16 @@ def autocast_context(use_amp):
 def resolve_test_path(args):
     if args.test_data:
         return args.test_data
-    # Авто-путь соответствует структуре датасета в проекте.
     data_root = args.data_root or os.path.join("Files", args.dataset, "LiDAR")
-    return os.path.join(data_root, f"{args.dataset}_test.txt")
+    stem = f"{args.dataset}_test"
+    # GroundTruth-файл содержит метки классов — нужен для evaluation.
+    # Обычный test-файл может не иметь Classification → использоваться только для predictions.
+    for candidate_stem in [f"{stem}_GroundTruth", stem]:
+        for ext in (".laz", ".las", ".txt"):
+            candidate = os.path.join(data_root, candidate_stem + ext)
+            if os.path.exists(candidate):
+                return candidate
+    return os.path.join(data_root, stem + ".laz")
 
 
 def build_test_run_name(args, model_type, task, checkpoint):
@@ -128,6 +135,7 @@ def main():
     attention_k = checkpoint.get("attention_k", 16)
     attention_heads = checkpoint.get("attention_heads", 4)
     attention_dropout = checkpoint.get("attention_dropout", 0.1)
+    pt_k = checkpoint.get("pt_k", 16)
     class_to_idx = checkpoint.get("class_to_idx")
     normalize_stats = checkpoint.get("normalize_stats")
 
@@ -143,6 +151,7 @@ def main():
         attention_k=attention_k,
         attention_heads=attention_heads,
         attention_dropout=attention_dropout,
+        pt_k=pt_k,
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)

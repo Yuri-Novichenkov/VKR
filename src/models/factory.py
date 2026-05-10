@@ -10,6 +10,8 @@ from .pointnet import PointNetSegmentation, PointNetClassification
 from .pointnet_plusplus import PointNetPlusPlusSegmentation, PointNetPlusPlusClassification
 from .dgcnn import DGCNNSegmentation, DGCNNClassification
 from .ldgcnn import LDGCNNSegmentation, LDGCNNClassification
+from .point_transformer import PointTransformerSegmentation, PointTransformerClassification
+from .ldgcnn_flash import LDGCNNFlashSegmentation, LDGCNNFlashClassification
 
 
 def build_model(
@@ -24,11 +26,13 @@ def build_model(
     attention_k: int = 16,
     attention_heads: int = 4,
     attention_dropout: float = 0.1,
+    pt_k: int = 16,
+    pt_channels: tuple = (32, 64, 128, 256, 512),
 ):
     """Создаёт модель по строковому имени архитектуры и задачи.
 
     Args:
-        model_type:       "pointnet" | "pointnet++" | "dgcnn" | "ldgcnn"
+        model_type:       "pointnet" | "pointnet++" | "dgcnn" | "ldgcnn" | "pointtransformer" | "ldgcnn_flash"
         task:             "segmentation" | "classification"
         num_classes:      количество классов
         num_features:     количество входных каналов на точку
@@ -38,6 +42,8 @@ def build_model(
         attention_k:      число соседей в attention-окне
         attention_heads:  число голов attention
         attention_dropout: dropout в attention
+        pt_k:             число соседей для Point Transformer (default 16)
+        pt_channels:      размеры каналов по уровням для Point Transformer
 
     Returns:
         nn.Module — инициализированная модель.
@@ -75,5 +81,25 @@ def build_model(
         )
         cls = LDGCNNSegmentation if seg else LDGCNNClassification
         return cls(**ldgcnn_kwargs)
+
+    if model_type == "pointtransformer":
+        pt_kwargs = dict(
+            num_classes=num_classes,
+            num_features=num_features,
+            k=pt_k,
+            channels=pt_channels,
+        )
+        cls = PointTransformerSegmentation if seg else PointTransformerClassification
+        return cls(**pt_kwargs)
+
+    if model_type == "ldgcnn_flash":
+        cls = LDGCNNFlashSegmentation if seg else LDGCNNFlashClassification
+        return cls(
+            num_classes=num_classes,
+            num_features=num_features,
+            k=k,
+            num_heads=attention_heads,
+            dropout=attention_dropout,
+        )
 
     raise ValueError(f"Неизвестная архитектура: {model_type!r}.")

@@ -1,0 +1,10 @@
+=== Roofline-анализ (GPU: 27.77 TFLOPs fp32, BW: 768.0 GB/s) ===
+
+Ridge point: 36.2 GFLOPs/GB  (выше -> compute-bound, ниже -> memory-bound)
+
+Модель                 GFLOPs  GB accs   AI (F/B)   GFLOPs/s    Потолок  Утилиз. Режим
+------------------------------------------------------------------------------------------
+DGCNN                    16.7     0.27      62.28        442      27770     1.6% compute-bound
+LDGCNNFlash              27.0     0.39      69.14        774      27770     2.8% compute-bound
+PointTransformer          6.4     0.18      36.42         18      27770     0.1% compute-bound
+PointNet                  9.6     0.11      87.93       1657      27770     6.0% compute-bound

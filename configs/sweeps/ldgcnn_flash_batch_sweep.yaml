@@ -1,0 +1,26 @@
+experiment_name: VKR_BatchSweep
+run_group: ldgcnn_flash_mar16
+model: ldgcnn_flash
+task: segmentation
+dataset: Mar16
+batch_sizes: [2, 4, 8, 16, 32]
+
+common_args:
+  epochs: 10
+  num_points: 4096
+  lr: 0.001
+  amp: true
+  seed: 42
+  deterministic: false
+  cache_dir: cache
+  cache_mode: read
+  cache_chunked: true
+  chunk_size: 512
+  num_workers: 4
+  class_balance: effective
+  class_balance_beta: 0.999
+  k: 20
+  attention_heads: 4
+  attention_dropout: 0.1
+
+train_args: {}

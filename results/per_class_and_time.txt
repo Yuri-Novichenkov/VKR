@@ -1,0 +1,24 @@
+PointTransformer best run: loss=ce cb=effective val_miou=0.5746
+
+Класс | Название | IoU
+------|----------|----
+   0 | Низкая растительность          | 0.7411
+   1 | Непроницаемая поверхность      | 0.7398
+   2 | Транспортное средство          | 0.7652
+   3 | Городская мебель               | 0.2397
+   4 | Крыша                          | 0.9339
+   5 | Фасад                          | 0.5301
+   6 | Кустарник                      | 0.4071
+   7 | Дерево                         | 0.7816
+   8 | Грунт/гравий                   | 0.3811
+   9 | Вертикальная поверхность       | 0.1951
+  10 | Дымовая труба                  | 0.6059
+
+=== Training times ===
+Модель | epoch_time_sec | epochs | total_hours
+PointNet             | 142.8s/ep | 100 ep | ~4.0h | loss=ce cb=effective
+PointNet++           | 1372.6s/ep | 100 ep | ~38.1h | loss=lovasz cb=effective
+DGCNN                | 37.2s/ep | 100 ep | ~1.0h | loss=focal cb=effective
+LDGCNN               | 97.6s/ep | 100 ep | ~2.7h | loss=ce cb=effective
+PointTransformer     | 134.1s/ep | 100 ep | ~3.7h | loss=ce cb=effective
+LDGCNNFlash          | 38.0s/ep | 100 ep | ~1.1h | loss=ce cb=effective

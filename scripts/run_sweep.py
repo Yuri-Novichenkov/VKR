@@ -88,16 +88,33 @@ def _slug_value_single(axis: str, value) -> str:
     return _slug(value)
 
 
-def _build_experiment_dir(base_dir: Path, cfg: dict) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+def _experiment_dir_suffix(cfg: dict) -> str:
+    """Суффикс имени папки эксперимента без временной метки."""
     model = _slug(cfg.get("model", cfg.get("models", [{}])[0].get("model", "model")))
     dataset = _slug(cfg.get("dataset", "dataset"))
     exp_name = _slug(cfg.get("experiment_name", "sweep"))
     run_group = _slug(cfg.get("run_group", "default"))
-    folder = f"{stamp}_{exp_name}_{model}_{dataset}_{run_group}"
+    return f"{exp_name}_{model}_{dataset}_{run_group}"
+
+
+def _build_experiment_dir(base_dir: Path, cfg: dict) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    folder = f"{stamp}_{_experiment_dir_suffix(cfg)}"
     out_dir = base_dir / folder
     out_dir.mkdir(parents=True, exist_ok=False)
     return out_dir
+
+
+def _find_latest_experiment_dir(base_dir: Path, cfg: dict) -> Path | None:
+    """Ищет последнюю существующую папку для данного конфига (для --resume)."""
+    if not base_dir.exists():
+        return None
+    suffix = _experiment_dir_suffix(cfg)
+    candidates = [d for d in base_dir.iterdir() if d.is_dir() and d.name.endswith(suffix)]
+    if not candidates:
+        return None
+    # Сортируем по имени (первые 15 символов — временная метка YYYYmmdd_HHMMSS)
+    return max(candidates, key=lambda d: d.name[:15])
 
 
 def _build_train_command(
@@ -193,7 +210,8 @@ def _write_summary(rows: list[dict], out_path: Path) -> None:
 # ─────────────────────────── matrix sweep ─────────────────────────────────
 
 
-def _run_matrix_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, dry_run):
+def _run_matrix_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, dry_run,
+                      resume: bool = False, only_model: str | None = None):
     """Запускает полную матрицу models × loss_configs."""
     models_list = cfg["models"]          # [{model, task?, train_args?}, ...]
     loss_configs = cfg["loss_configs"]   # [{name, loss_type, ...}, ...]
@@ -207,6 +225,13 @@ def _run_matrix_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, dr
         model_name = model_cfg["model"]
         # Если задано поле name — используем его для уникальной идентификации варианта
         model_display_name = model_cfg.get("name", model_name)
+
+        # --only_model: пропускаем все остальные модели
+        if only_model is not None and model_display_name != only_model:
+            run_idx += len(loss_configs)
+            print(f"  [SKIP] model={model_display_name} (--only_model={only_model})")
+            continue
+
         for lc in loss_configs:
             run_idx += 1
             lc_name = lc["name"]
@@ -223,6 +248,37 @@ def _run_matrix_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, dr
             log_path = logs_dir / f"train_{slug}.log"
             metrics_path = metrics_dir / f"metrics_{slug}.json"
 
+            # --resume: пропускаем уже завершённые запуски
+            if resume and metrics_path.exists():
+                print(f"[{run_idx}/{total}] model={model_display_name}, loss={lc_name}  [SKIP — already done]")
+                if not dry_run:
+                    data = _read_metrics(metrics_path)
+                    row = {
+                        "model": model_display_name,
+                        "loss_config_name": lc_name,
+                        "loss_type": lc.get("loss_type", "ce"),
+                        "class_balance": lc.get("class_balance", "none"),
+                        "class_balance_beta": lc.get("class_balance_beta"),
+                        "return_code": 0,
+                        "wall_time_sec": data.get("total_train_time_sec", 0),
+                        "log_path": str(log_path),
+                        "metrics_path": str(metrics_path),
+                        "run_name": run_name,
+                        "best_val_metric": data.get("best_val_metric"),
+                        "best_epoch": data.get("best_epoch"),
+                        "total_train_time_sec": data.get("total_train_time_sec"),
+                        "mean_epoch_time_sec": data.get("mean_epoch_time_sec"),
+                        "max_peak_vram_mb": data.get("max_peak_vram_mb"),
+                        "final_val_accuracy": data.get("final_val_accuracy"),
+                        "final_val_miou": data.get("final_val_miou"),
+                        "best_val_miou": data.get("best_val_miou"),
+                        "num_points": data.get("num_points"),
+                        "batch_size": data.get("batch_size"),
+                        "best_val_per_class_iou": json.dumps(data.get("best_val_per_class_iou")),
+                    }
+                    summary_rows.append(row)
+                continue
+
             cmd = _build_train_command(
                 cfg,
                 python_executable,
@@ -232,7 +288,7 @@ def _run_matrix_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, dr
                 model_override=model_cfg,
             )
 
-            print(f"[{run_idx}/{total}] model={model_name}, loss={lc_name}")
+            print(f"[{run_idx}/{total}] model={model_display_name}, loss={lc_name}")
             if dry_run:
                 print("  [DRY RUN]", " ".join(cmd))
                 continue
@@ -364,6 +420,19 @@ def main():
     )
     parser.add_argument("--no_auto_plot", action="store_true", help="Disable automatic plotting after sweep")
     parser.add_argument("--dry_run", action="store_true", help="Only print commands, do not run")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Пропускать уже завершённые запуски (metrics JSON уже существует). "
+             "Позволяет продолжить прерванный sweep с того места, где остановился.",
+    )
+    parser.add_argument(
+        "--only_model",
+        type=str,
+        default=None,
+        help="Запустить только модель с данным именем (model display name из YAML). "
+             "Удобно для последовательного запуска по одной модели.",
+    )
     args = parser.parse_args()
 
     cfg_path = (ROOT / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
@@ -376,8 +445,12 @@ def main():
     python_executable = args.python_executable or cfg.get("python_executable") or sys.executable
 
     # Определяем output_root
+    # Приоритет: --output_root CLI > output_root в YAML > дефолт по режиму
+    cfg_output_root = cfg.get("output_root")
     if args.output_root:
         output_root = (ROOT / args.output_root).resolve()
+    elif cfg_output_root:
+        output_root = (ROOT / cfg_output_root).resolve()
     elif sweep_mode == "matrix":
         output_root = ROOT / "experiments" / "loss_sweep"
     else:
@@ -389,6 +462,20 @@ def main():
         logs_dir = exp_dir / "logs"
         metrics_dir = exp_dir / "metrics"
         plots_dir = exp_dir / "plots"
+    elif args.resume:
+        # --resume: ищем последнюю существующую папку для данного конфига
+        exp_dir = _find_latest_experiment_dir(output_root, cfg)
+        if exp_dir is None:
+            print("  [RESUME] Не найдена существующая папка — создаём новую.")
+            exp_dir = _build_experiment_dir(output_root, cfg)
+        else:
+            print(f"  [RESUME] Продолжаем эксперимент: {exp_dir}")
+        logs_dir = exp_dir / "logs"
+        metrics_dir = exp_dir / "metrics"
+        plots_dir = exp_dir / "plots"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        plots_dir.mkdir(parents=True, exist_ok=True)
     else:
         exp_dir = _build_experiment_dir(output_root, cfg)
         logs_dir = exp_dir / "logs"
@@ -409,7 +496,10 @@ def main():
     print(f"Sweep output directory: {exp_dir}")
 
     if sweep_mode == "matrix":
-        summary_rows = _run_matrix_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, args.dry_run)
+        summary_rows = _run_matrix_sweep(
+            cfg, exp_dir, logs_dir, metrics_dir, python_executable, args.dry_run,
+            resume=args.resume, only_model=args.only_model,
+        )
     else:
         # single-axis mode
         bs_vals = cfg.get("batch_sizes")

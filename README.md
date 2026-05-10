@@ -171,15 +171,148 @@ python scripts/train.py --model ldgcnn --task classification --dataset Mar16 --n
 ```bash
 python scripts/train.py --dataset Mar16 --num_points 4096 --cache_dir cache --cache_mode write --cache_chunked --chunk_size 512 --cache_only
 ```
+**Для генерации предсказаний (на ноутбуке, CPU):**
+
+Примерное время на Mar16 (1239 облаков): PointNet ~1.5 мин, PointNet++ ~6 мин,
+DGCNN/LDGCNNFlash/PointTransformer ~10 мин, LDGCNN ~28 мин.
+
+```powershell
+# PointNet
+python scripts/predictions.py `
+    --checkpoint "checkpoints/loss_sweep/pointnet/segmentation/cb_effective_b0p99999/mar16/best_model.pth" `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --output_root predictions --device cpu
+```
+
+```powershell
+# PointNet++
+python scripts/predictions.py `
+    --checkpoint "checkpoints/loss_sweep/pointnet++/segmentation/loss_lovasz_g2p0__cb_effective_b0p99999/mar16/best_model.pth" `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --output_root predictions --device cpu
+```
+
+```powershell
+# DGCNN
+python scripts/predictions.py `
+    --checkpoint "checkpoints/loss_sweep/dgcnn/segmentation/loss_lovasz_g2p0__cb_effective_b0p99999/mar16/best_model.pth" `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --output_root predictions --device cpu
+```
+
+```powershell
+# LDGCNN (GATv2)
+python scripts/predictions.py `
+    --checkpoint "checkpoints/loss_sweep/ldgcnn/segmentation/attn_gatv2_k16_h4_d0p1__cb_effective_b0p99999/mar16/best_model.pth" `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --output_root predictions --device cpu
+```
+
+```powershell
+# PointTransformer
+python scripts/predictions.py `
+    --checkpoint "checkpoints/loss_sweep/pointtransformer/segmentation/cb_effective_b0p99999/mar16/best_model.pth" `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --output_root predictions --device cpu
+```
+
+```powershell
+# LDGCNNFlash
+python scripts/predictions.py `
+    --checkpoint "checkpoints/loss_sweep/ldgcnn_flash/segmentation/loss_lovasz_g2p0__cb_effective_b0p99999/mar16/best_model.pth" `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --output_root predictions --device cpu
+```
+
 **Для визуализации файлов:**
-```bash
-python scripts/visualization.py --data Files/Mar16/LiDAR/Mar16_test.txt --predictions predictions\pointnet\Mar16_test_GroundTruth\Mar16_test_GroundTruth_predictions.txt --color_by pred --max_points 1000000
+
+Легенда классов задаётся через `--class_config configs/classes/hessigheim.yaml`.
+Флаг `--legend` сохраняет `figures/legend.png` (накладывается поверх скриншота).
+`--max_points` — число точек для отображения (300000 хватает для скриншота).
+
+```powershell
+# Ground Truth — Mar16
+python scripts/visualization.py `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --color_by gt --num_classes 11 `
+    --class_config configs/classes/hessigheim.yaml `
+    --legend --max_points 300000
 ```
-```bash
-python scripts/visualization.py --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --color_by gt --max_points 1000000
+
+```powershell
+# PointNet — предсказание Mar16
+python scripts/visualization.py `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --predictions "predictions/pointnet/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
+    --color_by pred --num_classes 11 `
+    --class_config configs/classes/hessigheim.yaml `
+    --legend --max_points 300000
 ```
-```bash
-python scripts/visualization.py --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --color_by rgb --max_points 1000000
+
+```powershell
+# PointNet++ — предсказание Mar16
+python scripts/visualization.py `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --predictions "predictions/pointnet++/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
+    --color_by pred --num_classes 11 `
+    --class_config configs/classes/hessigheim.yaml `
+    --legend --max_points 300000
+```
+
+```powershell
+# DGCNN — предсказание Mar16
+python scripts/visualization.py `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --predictions "predictions/dgcnn/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
+    --color_by pred --num_classes 11 `
+    --class_config configs/classes/hessigheim.yaml `
+    --legend --max_points 300000
+```
+
+```powershell
+# LDGCNN — предсказание Mar16
+python scripts/visualization.py `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --predictions "predictions/ldgcnn/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
+    --color_by pred --num_classes 11 `
+    --class_config configs/classes/hessigheim.yaml `
+    --legend --max_points 300000
+```
+
+```powershell
+# PointTransformer — предсказание Mar16
+python scripts/visualization.py `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --predictions "predictions/pointtransformer/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
+    --color_by pred --num_classes 11 `
+    --class_config configs/classes/hessigheim.yaml `
+    --legend --max_points 300000
+```
+
+```powershell
+# LDGCNNFlash — предсказание Mar16
+python scripts/visualization.py `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --predictions "predictions/ldgcnn_flash/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
+    --color_by pred --num_classes 11 `
+    --class_config configs/classes/hessigheim.yaml `
+    --legend --max_points 300000
+```
+
+```powershell
+# RGB-окраска (без классов)
+python scripts/visualization.py `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --color_by rgb --max_points 300000
+```
+
+```powershell
+# Только легенда (без Open3D) — сохранить figures/legend.png
+python scripts/visualization.py `
+    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
+    --color_by gt --num_classes 11 `
+    --class_config configs/classes/hessigheim.yaml `
+    --legend --max_points 1
 ```
 
 ### Параметры обучения

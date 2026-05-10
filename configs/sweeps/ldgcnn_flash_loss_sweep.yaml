@@ -1,0 +1,49 @@
+experiment_name: VKR_LossSweep
+run_group: loss_sweep
+dataset: Mar16
+task: segmentation
+
+models:
+  - name: ldgcnn_flash
+    model: ldgcnn_flash
+    train_args:
+      lr: 0.001
+      amp: true
+      k: 20
+      attention_heads: 4
+      attention_dropout: 0.1
+
+loss_configs:
+  - name: ce_baseline
+    loss_type: ce
+  - name: ce_cb
+    loss_type: ce
+    class_balance: effective
+    class_balance_beta: 0.99999
+  - name: focal
+    loss_type: focal
+    focal_gamma: 2.0
+  - name: focal_cb
+    loss_type: focal
+    focal_gamma: 2.0
+    class_balance: effective
+    class_balance_beta: 0.99999
+  - name: lovasz_cb
+    loss_type: lovasz
+    class_balance: effective
+    class_balance_beta: 0.99999
+
+common_args:
+  num_points: 4096
+  epochs: 100
+  seed: 42
+  deterministic: false
+  cache_dir: cache
+  cache_mode: read
+  cache_chunked: true
+  chunk_size: 512
+  num_workers: 4
+  lr_scheduler: cosine
+  checkpoints_root: checkpoints/loss_sweep
+  early_stopping_patience: 20
+  batch_size: 16

@@ -543,8 +543,20 @@ def resolve_data_paths(args):
     if data_root is None:
         data_root = os.path.join("Files", args.dataset, "LiDAR")
 
-    train_data = os.path.join(data_root, f"{args.dataset}_train.txt")
-    val_data = os.path.join(data_root, f"{args.dataset}_val.txt")
+    # Перебираем расширения по приоритету: .laz (быстрее, меньше) → .las → .txt
+    # Это нужно, т.к. разные датасеты могут быть экспортированы в разных форматах,
+    # а .laz/.las через laspy всегда даёт стандартные имена колонок (X, Y, Z, ...).
+    _EXT_PRIORITY = [".laz", ".las", ".txt"]
+    def _find_file(stem: str) -> str:
+        for ext in _EXT_PRIORITY:
+            candidate = os.path.join(data_root, stem + ext)
+            if os.path.exists(candidate):
+                return candidate
+        # Если ничего не найдено — возвращаем путь с .laz (упадёт с понятной ошибкой)
+        return os.path.join(data_root, stem + ".laz")
+
+    train_data = _find_file(f"{args.dataset}_train")
+    val_data = _find_file(f"{args.dataset}_val")
     return train_data, val_data
 
 
@@ -671,7 +683,7 @@ def main():
              "Используй чтобы изолировать эксперименты от базовых чекпоинтов.",
     )
     parser.add_argument("--resume", type=str, default=None, help="Путь к чекпоинту для возобновления обучения")
-    parser.add_argument("--model", type=str, default="pointnet", choices=["pointnet", "pointnet++", "dgcnn", "ldgcnn"], help="Модель")
+    parser.add_argument("--model", type=str, default="pointnet", choices=["pointnet", "pointnet++", "dgcnn", "ldgcnn", "pointtransformer", "ldgcnn_flash"], help="Модель")
     parser.add_argument("--task", type=str, default="segmentation", choices=["segmentation", "classification"], help="Задача")
     parser.add_argument("--experiment_name", type=str, default="PointCloudExperiments", help="MLflow experiment name")
     parser.add_argument("--run_name", type=str, default=None, help="Имя запуска в MLflow")
@@ -690,6 +702,7 @@ def main():
     parser.add_argument("--attention_k", type=int, default=16, help="Размер локального окна attention")
     parser.add_argument("--attention_heads", type=int, default=4, help="Количество attention heads")
     parser.add_argument("--attention_dropout", type=float, default=0.1, help="Dropout в attention")
+    parser.add_argument("--pt_k", type=int, default=16, help="k соседей для Point Transformer")
     parser.add_argument("--loss_type", type=str, default="ce", choices=["ce", "focal", "cb_focal", "lovasz"], help="Тип функции потерь")
     parser.add_argument("--focal_gamma", type=float, default=2.0, help="Gamma для focal loss")
     parser.add_argument(
@@ -876,6 +889,7 @@ def main():
         attention_k=args.attention_k,
         attention_heads=args.attention_heads,
         attention_dropout=args.attention_dropout,
+        pt_k=args.pt_k,
     ).to(device)
     logger.info("Используется модель: %s (%s)", args.model, args.task)
     logger.info("Параметров: %s", f"{sum(p.numel() for p in model.parameters()):,}")
@@ -1124,6 +1138,7 @@ def main():
                     "attention_k": args.attention_k,
                     "attention_heads": args.attention_heads,
                     "attention_dropout": args.attention_dropout,
+                    "pt_k": args.pt_k,
                     "loss_type": args.loss_type,
                     "focal_gamma": args.focal_gamma,
                     "class_balance": args.class_balance,
@@ -1160,6 +1175,7 @@ def main():
                 "attention_k": args.attention_k,
                 "attention_heads": args.attention_heads,
                 "attention_dropout": args.attention_dropout,
+                "pt_k": args.pt_k,
                 "loss_type": args.loss_type,
                 "focal_gamma": args.focal_gamma,
                 "class_balance": args.class_balance,

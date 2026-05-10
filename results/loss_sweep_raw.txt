@@ -1,0 +1,32 @@
+Модель | Функция потерь | val_mIoU | val_Acc
+-------|----------------|----------|--------
+PointNet             | CE                   | 0.4175 | 0.7939
+PointNet             | CE + CB-Loss         | 0.5868 | 0.8599
+PointNet             | Focal (gamma=2)      | 0.3941 | 0.7901
+PointNet             | Focal + CB-Loss      | 0.4145 | 0.7860
+PointNet             | Lovász + CB-Loss     | 0.4150 | 0.7852
+PointNet++           | CE                   | 0.4754 | 0.8213
+PointNet++           | CE + CB-Loss         | 0.4715 | 0.8153
+PointNet++           | Focal (gamma=2)      | 0.4727 | 0.8221
+PointNet++           | Focal + CB-Loss      | 0.4793 | 0.8045
+PointNet++           | Lovász + CB-Loss     | 0.5152 | 0.8154
+DGCNN                | CE                   | 0.3790 | 0.7949
+DGCNN                | CE + CB-Loss         | 0.4364 | 0.7986
+DGCNN                | Focal (gamma=2)      | 0.3853 | 0.7919
+DGCNN                | Focal + CB-Loss      | 0.4755 | 0.7994
+DGCNN                | Lovász + CB-Loss     | 0.3505 | 0.7174
+LDGCNN               | CE                   | 0.5249 | 0.8350
+LDGCNN               | CE + CB-Loss         | 0.5503 | 0.8339
+LDGCNN               | Focal (gamma=2)      | 0.5168 | 0.8316
+LDGCNN               | Focal + CB-Loss      | 0.5460 | 0.8306
+LDGCNN               | Lovász + CB-Loss     | 0.5370 | 0.8264
+PointTransformer     | CE                   | 0.5232 | 0.8399
+PointTransformer     | CE + CB-Loss         | 0.5746 | 0.8445
+PointTransformer     | Focal (gamma=2)      | 0.5046 | 0.8314
+PointTransformer     | Focal + CB-Loss      | 0.5114 | 0.8337
+PointTransformer     | Lovász + CB-Loss     | 0.5119 | 0.8288
+LDGCNNFlash          | CE                   | 0.5380 | 0.8446
+LDGCNNFlash          | CE + CB-Loss         | 0.5514 | 0.8460
+LDGCNNFlash          | Focal (gamma=2)      | 0.5220 | 0.8453
+LDGCNNFlash          | Focal + CB-Loss      | 0.5073 | 0.8305
+LDGCNNFlash          | Lovász + CB-Loss     | 0.5511 | 0.8430

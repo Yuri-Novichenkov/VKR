@@ -1,0 +1,99 @@
+# Сравнительный эксперимент на Mar19.
+# Каждая модель использует лучший loss config из экспериментов на Mar16.
+# Чекпоинты изолированы: checkpoints/comparison/{model}/{task}/{variant}/mar19/best_model.pth
+experiment_name: VKR_Comparison
+run_group: comparison_mar19
+dataset: Mar19
+task: segmentation
+
+models:
+  - name: pointnet
+    model: pointnet
+    train_args:
+      lr: 0.001
+      amp: true
+      batch_size: 16
+      loss_type: ce
+      class_balance: effective
+      class_balance_beta: 0.99999
+
+  - name: pointnet++
+    model: "pointnet++"
+    train_args:
+      lr: 0.001
+      amp: true
+      batch_size: 16
+      loss_type: lovasz
+      class_balance: effective
+      class_balance_beta: 0.99999
+
+  - name: dgcnn
+    model: dgcnn
+    train_args:
+      lr: 0.001
+      amp: true
+      batch_size: 4
+      k: 20
+      loss_type: lovasz
+      class_balance: effective
+      class_balance_beta: 0.99999
+
+  - name: ldgcnn_gatv2
+    model: ldgcnn
+    train_args:
+      lr: 0.001
+      amp: true
+      batch_size: 16
+      k_small: 20
+      k_large: 40
+      attention_type: gatv2
+      attention_k: 16
+      attention_heads: 4
+      attention_dropout: 0.1
+      loss_type: ce
+      class_balance: effective
+      class_balance_beta: 0.99999
+
+  - name: pointtransformer
+    model: pointtransformer
+    train_args:
+      lr: 0.001
+      amp: true
+      batch_size: 4
+      pt_k: 16
+      loss_type: ce
+      class_balance: effective
+      class_balance_beta: 0.99999
+
+  - name: ldgcnn_flash
+    model: ldgcnn_flash
+    train_args:
+      lr: 0.001
+      amp: true
+      batch_size: 16
+      k: 20
+      attention_heads: 4
+      attention_dropout: 0.1
+      loss_type: lovasz
+      class_balance: effective
+      class_balance_beta: 0.99999
+
+# Один пустой loss_config — не перезаписывает train_args моделей
+loss_configs:
+  - name: best_from_mar16
+
+output_root: experiments/comparison
+
+common_args:
+  num_points: 4096
+  epochs: 100
+  seed: 42
+  deterministic: false
+  cache_dir: cache
+  cache_mode: write
+  cache_chunked: true
+  chunk_size: 512
+  num_workers: 4
+  lr_scheduler: cosine
+  checkpoints_root: checkpoints/comparison
+  early_stopping_patience: 20

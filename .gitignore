@@ -84,6 +84,13 @@ tmp_*.zip
 tmp_*/
 tmp_eval_*.json
 
+# ONNX артефакты
+*.onnx
+*.onnx.data
+
+# Chrome Profiler traces (могут быть сотни МБ)
+*_trace.json
+
 # Эксперименты и автоматически сгенерированные артефакты
 experiments/
 diagrams/netron/

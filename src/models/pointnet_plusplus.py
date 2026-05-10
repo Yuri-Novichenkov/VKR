@@ -20,14 +20,24 @@ def square_distance(src, dst):
         src: (B, N, C) - исходные точки
         dst: (B, M, C) - целевые точки
     Returns:
-        dist: (B, N, M) - квадраты расстояний
+        dist: (B, N, M) - квадраты расстояний (>= 0)
+
+    Примечание: torch.matmul находится в списке "lower_precision_fp" операций
+    и при AMP всегда выполняется в FP16, даже если входные тензоры явно приведены
+    к float(). Это приводит к underflow расстояний < 6e-5 → 0 → NaN в ball query
+    и IDW interpolation. Оборачиваем matmul в autocast(enabled=False), чтобы
+    форсировать FP32 независимо от внешнего контекста.
     """
     B, N, _ = src.shape
     _, M, _ = dst.shape
-    dist = -2 * torch.matmul(src, dst.permute(0, 2, 1))
-    dist += torch.sum(src ** 2, -1).view(B, N, 1)
-    dist += torch.sum(dst ** 2, -1).view(B, 1, M)
-    return dist
+    src_f = src.float()
+    dst_f = dst.float()
+    device_type = src.device.type  # 'cuda' или 'cpu'
+    with torch.amp.autocast(device_type=device_type, enabled=False):
+        dist = -2 * torch.matmul(src_f, dst_f.permute(0, 2, 1))
+        dist += torch.sum(src_f ** 2, -1).view(B, N, 1)
+        dist += torch.sum(dst_f ** 2, -1).view(B, 1, M)
+    return dist.clamp(min=0.0)
 
 
 def index_points(points, idx):
@@ -61,9 +71,9 @@ def farthest_point_sample(xyz, npoint):
     """
     device = xyz.device
     B, N, C = xyz.shape
-    centroids = torch.zeros(B, npoint, dtype=torch.long).to(device)
-    distance = torch.ones(B, N).to(device) * 1e10
-    farthest = torch.randint(0, N, (B,), dtype=torch.long).to(device)
+    centroids = torch.zeros(B, npoint, dtype=torch.long, device=device)
+    distance = torch.full((B, N), float('inf'), dtype=xyz.dtype, device=device)
+    farthest = torch.randint(0, N, (B,), dtype=torch.long, device=device)
 
     # Итеративно добавляем точку, максимально удаленную
     # от уже выбранного множества опорных точек.
@@ -142,7 +152,7 @@ def sample_and_group_all(xyz, points):
     Sampling и Grouping для всех точек последний слой
     """
     B, N, C = xyz.shape
-    new_xyz = torch.zeros(B, 1, C).to(xyz.device)
+    new_xyz = torch.zeros(B, 1, C, dtype=xyz.dtype, device=xyz.device)
     grouped_xyz = xyz.view(B, 1, N, C)
     if points is not None:
         new_points = torch.cat([grouped_xyz, points.view(B, 1, N, -1)], dim=-1)
@@ -239,7 +249,7 @@ class PointNetFeaturePropagation(nn.Module):
             # вес обратно пропорционален расстоянию.
             dist_recip = 1.0 / (dists + 1e-8)
             norm = torch.sum(dist_recip, dim=2, keepdim=True)
-            weight = dist_recip / norm
+            weight = (dist_recip / norm).to(points2.dtype)
             interpolated_points = torch.sum(index_points(points2, idx) * weight.view(B, N, 3, 1), dim=2)
 
         if points1 is not None:
