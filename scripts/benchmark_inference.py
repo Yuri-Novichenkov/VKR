@@ -349,7 +349,7 @@ def main():
                         help="Точек в облаке (default: 4096)")
     parser.add_argument("--device", type=str, default="auto",
                         choices=["auto", "cpu", "cuda"],
-                        help="Устройство (default: auto → cuda если есть)")
+                        help="Устройство (default: auto -> cuda если есть)")
     parser.add_argument("--output_csv", type=str, default=None,
                         help="Путь для сохранения результатов в CSV")
     parser.add_argument("--output_json", type=str, default=None,

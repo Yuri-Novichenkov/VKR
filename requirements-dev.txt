@@ -1,0 +1,25 @@
+# Зависимости для анализа, профилирования и визуализации результатов.
+# Устанавливать на сервере обучения:
+#   pip install -r requirements-dev.txt
+
+# Excel-отчёты
+openpyxl>=3.1
+
+# Подсчёт MACs/FLOPs
+thop>=0.1.1
+torchprofile>=0.0.4
+
+# Детальный анализ по слоям
+torchinfo>=1.8
+
+# Быстрый kNN для оптимизации инференса
+# Версия должна совпадать с PyTorch+CUDA, например:
+#   pip install torch-cluster -f https://data.pyg.org/whl/torch-2.11.0+cu130.html
+torch-cluster
+
+# ONNX экспорт и инференс
+onnx>=1.16
+onnxruntime>=1.18
+
+# Визуализация графа вычислений (опционально)
+# torchviz>=0.0.2

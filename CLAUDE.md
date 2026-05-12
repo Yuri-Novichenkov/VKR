@@ -161,6 +161,12 @@ All models share the same `get_loss(predictions, targets, class_weights)` interf
 
 5. **PointNet++ AMP**: Disable entirely (`amp: false` in training). NaN occurs during training even with above fixes due to FPS instability.
 
+### Known Limitations
+
+- **Validation mIoU при `--cache_chunked`**: В train.py scene-level voting отключается если val_dataset chunked (см. `use_voting` в evaluate()). Все sweep-эксперименты запускались с `--cache_chunked`, поэтому best_val_miou в MLflow — block-level метрика. Финальный test.py использует scene-level voting. **Сравнение моделей между собой корректно** (все оценивались одинаково), но абсолютные цифры могут незначительно отличаться.
+
+- **torch_cluster (fast_knn)**: Для плотных батчей N=4096 torch_cluster оказывается ~14× медленнее matmul-based kNN, потому что cuBLAS GEMM эффективнее разреженного алгоритма. fast_knn=False — дефолт; fast_knn=True нужен только для экспериментов.
+
 ### Inference Optimization Results (Mar16, GPU RTX A5000, batch=1)
 
 Best mode per model:

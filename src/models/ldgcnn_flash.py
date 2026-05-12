@@ -82,9 +82,10 @@ class EdgeConvBlock(nn.Module):
         k:            число ближайших соседей
     """
 
-    def __init__(self, in_channels: int, out_channels: int, k: int = 20):
+    def __init__(self, in_channels: int, out_channels: int, k: int = 20, fast_knn: bool = False):
         super().__init__()
-        self.k = k
+        self.k        = k
+        self.fast_knn = fast_knn
         # 2*in_channels: [x_i ‖ x_j − x_i]
         self.mlp = _EdgeConvMLP(2 * in_channels, out_channels)
 
@@ -100,7 +101,7 @@ class EdgeConvBlock(nn.Module):
         K = self.k
 
         # k-NN в XYZ-пространстве (исправленный _knn_query — FP32)
-        idx = _knn_query(K, pos, pos)           # (B, N, K)
+        idx = _knn_query(K, pos, pos, fast=self.fast_knn)  # (B, N, K)
         idx_flat = idx.reshape(B, N * K)
 
         x_j = _index_points(x, idx_flat).view(B, N, K, C)  # (B, N, K, C)
@@ -234,21 +235,22 @@ class LDGCNNFlashSegmentation(nn.Module):
         num_heads: int = 4,
         ffn_ratio: int = 2,
         dropout: float = 0.1,
+        fast_knn: bool = False,
     ):
         super().__init__()
         self.num_classes = num_classes
         C1, C2, C3 = channels
 
         # ── Stage 1 ───────────────────────────────────────────────────────
-        self.ec1 = EdgeConvBlock(num_features, C1, k=k)
+        self.ec1 = EdgeConvBlock(num_features, C1, k=k, fast_knn=fast_knn)
         self.attn1 = FlashAttentionBlock(C1, num_heads=num_heads, ffn_ratio=ffn_ratio, dropout=dropout)
 
         # ── Stage 2 (linked: [x, a1]) ────────────────────────────────────
-        self.ec2 = EdgeConvBlock(num_features + C1, C2, k=k)
+        self.ec2 = EdgeConvBlock(num_features + C1, C2, k=k, fast_knn=fast_knn)
         self.attn2 = FlashAttentionBlock(C2, num_heads=num_heads, ffn_ratio=ffn_ratio, dropout=dropout)
 
         # ── Stage 3 (linked: [x, a1, a2]) ────────────────────────────────
-        self.ec3 = EdgeConvBlock(num_features + C1 + C2, C3, k=k)
+        self.ec3 = EdgeConvBlock(num_features + C1 + C2, C3, k=k, fast_knn=fast_knn)
         self.attn3 = FlashAttentionBlock(C3, num_heads=num_heads, ffn_ratio=ffn_ratio, dropout=dropout)
 
         # ── Head MLP ─────────────────────────────────────────────────────
@@ -316,18 +318,19 @@ class LDGCNNFlashClassification(nn.Module):
         num_heads: int = 4,
         ffn_ratio: int = 2,
         dropout: float = 0.1,
+        fast_knn: bool = False,
     ):
         super().__init__()
         self.num_classes = num_classes
         C1, C2, C3 = channels
 
-        self.ec1 = EdgeConvBlock(num_features, C1, k=k)
+        self.ec1 = EdgeConvBlock(num_features, C1, k=k, fast_knn=fast_knn)
         self.attn1 = FlashAttentionBlock(C1, num_heads=num_heads, ffn_ratio=ffn_ratio, dropout=dropout)
 
-        self.ec2 = EdgeConvBlock(num_features + C1, C2, k=k)
+        self.ec2 = EdgeConvBlock(num_features + C1, C2, k=k, fast_knn=fast_knn)
         self.attn2 = FlashAttentionBlock(C2, num_heads=num_heads, ffn_ratio=ffn_ratio, dropout=dropout)
 
-        self.ec3 = EdgeConvBlock(num_features + C1 + C2, C3, k=k)
+        self.ec3 = EdgeConvBlock(num_features + C1 + C2, C3, k=k, fast_knn=fast_knn)
         self.attn3 = FlashAttentionBlock(C3, num_heads=num_heads, ffn_ratio=ffn_ratio, dropout=dropout)
 
         agg_ch = (C1 + C2 + C3) * 2  # max + avg pooling

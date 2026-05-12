@@ -94,19 +94,42 @@ def _farthest_point_sample(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
     return centroids
 
 
-def _knn_query(k: int, pos_base: torch.Tensor, pos_query: torch.Tensor) -> torch.Tensor:
+def _knn_query(k: int, pos_base: torch.Tensor, pos_query: torch.Tensor,
+               fast: bool = False) -> torch.Tensor:
     """
     k ближайших соседей из pos_base для каждой точки pos_query.
     Args:
         k:          число соседей
         pos_base:   (B, N, 3) — база поиска
         pos_query:  (B, M, 3) — запросы
+        fast:       использовать torch_cluster вместо полной матрицы расстояний
     Returns:
         idx: (B, M, k)
     """
+    if fast:
+        return _knn_query_tc(k, pos_base, pos_query)
     dist = _square_distance(pos_query.float(), pos_base.float())  # FP32 для стабильности
     _, idx = dist.topk(k, dim=-1, largest=False, sorted=True)
     return idx
+
+
+def _knn_query_tc(k: int, pos_base: torch.Tensor, pos_query: torch.Tensor) -> torch.Tensor:
+    """
+    Быстрый kNN через torch_cluster. pos: (B, N/M, 3) -> idx: (B, M, k)
+    """
+    from torch_cluster import knn as tc_knn
+    B, N, C = pos_base.shape
+    M = pos_query.shape[1]
+    device = pos_base.device
+    base_flat  = pos_base.float().reshape(B * N, C)
+    query_flat = pos_query.float().reshape(B * M, C)
+    batch_base  = torch.arange(B, device=device).repeat_interleave(N)
+    batch_query = torch.arange(B, device=device).repeat_interleave(M)
+    # knn(x=база, y=запросы, k): для каждой точки y находит k ближайших в x
+    edge_index = tc_knn(base_flat, query_flat, k, batch_x=batch_base, batch_y=batch_query)
+    batch_offset = batch_query[edge_index[0]] * N
+    local_neighbors = (edge_index[1] - batch_offset).view(B * M, k)
+    return local_neighbors.view(B, M, k)
 
 
 def _apply_bn(x: torch.Tensor, bn: nn.BatchNorm1d) -> torch.Tensor:
@@ -234,10 +257,12 @@ class TransitionDown(nn.Module):
     Уменьшает число точек N → npoint.
     """
 
-    def __init__(self, in_channels: int, out_channels: int, npoint: int, k: int = 16):
+    def __init__(self, in_channels: int, out_channels: int, npoint: int, k: int = 16,
+                 fast_knn: bool = False):
         super().__init__()
-        self.npoint = npoint
-        self.k      = k
+        self.npoint   = npoint
+        self.k        = k
+        self.fast_knn = fast_knn
         self.bn_in  = nn.BatchNorm1d(in_channels)
         # mlp применяется к 2D тензору (B*npoint, in_channels) → BN1d работает напрямую
         self.mlp    = nn.Sequential(
@@ -271,17 +296,17 @@ class TransitionDown(nn.Module):
         x_norm = _apply_bn(x, self.bn_in)                        # (B, N, C)
 
         # kNN из оригинального облака → пулинг (max)
-        pool_idx  = _knn_query(self.k, pos, pos_new)             # (B, M, k)
+        pool_idx  = _knn_query(self.k, pos, pos_new, fast=self.fast_knn)   # (B, M, k)
         pool_flat = pool_idx.reshape(B, M * self.k)
         x_neigh   = _index_points(x_norm, pool_flat).view(B, M, self.k, C)
-        x_new     = x_neigh.max(dim=2)[0]                        # (B, M, C)
+        x_new     = x_neigh.max(dim=2)[0]                                  # (B, M, C)
 
         # проекция: reshape в 2D для BN1d, затем обратно
         x_new = self.mlp(x_new.reshape(B * M, C)).reshape(B, M, -1)
 
         # kNN среди выбранных точек (используется в PT Block на этом уровне)
         k_self = min(self.k, M)
-        idx    = _knn_query(k_self, pos_new, pos_new)            # (B, M, k_self)
+        idx    = _knn_query(k_self, pos_new, pos_new, fast=self.fast_knn)  # (B, M, k_self)
 
         return x_new, pos_new, idx
 
@@ -353,9 +378,11 @@ class PointTransformerSegmentation(nn.Module):
         num_features: int = 9,
         k: int = 16,
         channels: tuple = (32, 64, 128, 256, 512),
+        fast_knn: bool = False,
     ):
         super().__init__()
         self.num_classes = num_classes
+        self.fast_knn    = fast_knn
         c0, c1, c2, c3, c4 = channels
 
         # stem: входная проекция признаков
@@ -364,13 +391,13 @@ class PointTransformerSegmentation(nn.Module):
 
         # ── encoder ──────────────────────────────────────
         self.enc0 = PointTransformerBlock(c0, k=k)
-        self.td1  = TransitionDown(c0, c1, npoint=1024, k=k)
+        self.td1  = TransitionDown(c0, c1, npoint=1024, k=k, fast_knn=fast_knn)
         self.enc1 = PointTransformerBlock(c1, k=k)
-        self.td2  = TransitionDown(c1, c2, npoint=256,  k=k)
+        self.td2  = TransitionDown(c1, c2, npoint=256,  k=k, fast_knn=fast_knn)
         self.enc2 = PointTransformerBlock(c2, k=k)
-        self.td3  = TransitionDown(c2, c3, npoint=64,   k=k)
+        self.td3  = TransitionDown(c2, c3, npoint=64,   k=k, fast_knn=fast_knn)
         self.enc3 = PointTransformerBlock(c3, k=k)
-        self.td4  = TransitionDown(c3, c4, npoint=16,   k=k)
+        self.td4  = TransitionDown(c3, c4, npoint=16,   k=k, fast_knn=fast_knn)
         self.enc4 = PointTransformerBlock(c4, k=k)
 
         # ── decoder ──────────────────────────────────────
@@ -403,7 +430,7 @@ class PointTransformerSegmentation(nn.Module):
         ).reshape(B, N, -1)
 
         # enc0: kNN в исходном облаке
-        idx0 = _knn_query(self.enc0.k, pos, pos)
+        idx0 = _knn_query(self.enc0.k, pos, pos, fast=self.fast_knn)
         x0   = self.enc0(x0, pos, idx0)                # (B, N, c0)
 
         # encoder
@@ -421,19 +448,19 @@ class PointTransformerSegmentation(nn.Module):
 
         # decoder
         d3  = self.tu3(x4, pos4, x3, pos3)
-        idx = _knn_query(self.dec3.k, pos3, pos3)
+        idx = _knn_query(self.dec3.k, pos3, pos3, fast=self.fast_knn)
         d3  = self.dec3(d3, pos3, idx)                 # (B, 64, c3)
 
         d2  = self.tu2(d3, pos3, x2, pos2)
-        idx = _knn_query(self.dec2.k, pos2, pos2)
+        idx = _knn_query(self.dec2.k, pos2, pos2, fast=self.fast_knn)
         d2  = self.dec2(d2, pos2, idx)                 # (B, 256, c2)
 
         d1  = self.tu1(d2, pos2, x1, pos1)
-        idx = _knn_query(self.dec1.k, pos1, pos1)
+        idx = _knn_query(self.dec1.k, pos1, pos1, fast=self.fast_knn)
         d1  = self.dec1(d1, pos1, idx)                 # (B, 1024, c1)
 
         d0  = self.tu0(d1, pos1, x0, pos)
-        idx = _knn_query(self.dec0.k, pos, pos)
+        idx = _knn_query(self.dec0.k, pos, pos, fast=self.fast_knn)
         d0  = self.dec0(d0, pos, idx)                  # (B, N, c0)
 
         return self.head(d0)                            # (B, N, num_classes)
@@ -468,22 +495,24 @@ class PointTransformerClassification(nn.Module):
         k: int = 16,
         channels: tuple = (32, 64, 128, 256, 512),
         dropout: float = 0.5,
+        fast_knn: bool = False,
     ):
         super().__init__()
         self.num_classes = num_classes
+        self.fast_knn = fast_knn
         c0, c1, c2, c3, c4 = channels
 
         self.stem_fc = nn.Linear(num_features, c0, bias=False)
         self.stem_bn = nn.BatchNorm1d(c0)
 
         self.enc0 = PointTransformerBlock(c0, k=k)
-        self.td1  = TransitionDown(c0, c1, npoint=1024, k=k)
+        self.td1  = TransitionDown(c0, c1, npoint=1024, k=k, fast_knn=fast_knn)
         self.enc1 = PointTransformerBlock(c1, k=k)
-        self.td2  = TransitionDown(c1, c2, npoint=256,  k=k)
+        self.td2  = TransitionDown(c1, c2, npoint=256,  k=k, fast_knn=fast_knn)
         self.enc2 = PointTransformerBlock(c2, k=k)
-        self.td3  = TransitionDown(c2, c3, npoint=64,   k=k)
+        self.td3  = TransitionDown(c2, c3, npoint=64,   k=k, fast_knn=fast_knn)
         self.enc3 = PointTransformerBlock(c3, k=k)
-        self.td4  = TransitionDown(c3, c4, npoint=16,   k=k)
+        self.td4  = TransitionDown(c3, c4, npoint=16,   k=k, fast_knn=fast_knn)
         self.enc4 = PointTransformerBlock(c4, k=k)
 
         self.head = nn.Sequential(
@@ -507,7 +536,7 @@ class PointTransformerClassification(nn.Module):
             inplace=True,
         ).reshape(B, N, -1)
 
-        x0 = self.enc0(x0, pos, _knn_query(self.enc0.k, pos, pos))
+        x0 = self.enc0(x0, pos, _knn_query(self.enc0.k, pos, pos, fast=self.fast_knn))
 
         x1, pos1, idx1 = self.td1(x0, pos)
         x1 = self.enc1(x1, pos1, idx1)

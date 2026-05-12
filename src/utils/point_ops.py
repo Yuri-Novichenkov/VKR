@@ -10,6 +10,28 @@
 import torch
 
 
+def _knn_torch_cluster(x, k):
+    """
+    Быстрый kNN через torch_cluster (GPU-оптимизированный).
+    Args:
+        x: (B, C, N)
+        k: число соседей
+    Returns:
+        idx: (B, N, k)
+    """
+    from torch_cluster import knn as tc_knn
+    B, C, N = x.shape
+    device = x.device
+    x_flat = x.permute(0, 2, 1).contiguous().view(B * N, C)
+    batch = torch.arange(B, device=device).repeat_interleave(N)
+    # tc_knn: для каждой точки y находит k ближайших в x
+    # edge_index[0] — индексы запросов, edge_index[1] — индексы соседей (глобальные)
+    edge_index = tc_knn(x_flat, x_flat, k, batch_x=batch, batch_y=batch)
+    batch_offset = batch[edge_index[0]] * N
+    local_neighbors = (edge_index[1] - batch_offset).view(B * N, k)
+    return local_neighbors.view(B, N, k)
+
+
 def pairwise_distance(x):
     """
     Вычисляет матрицу попарных квадратов расстояний.
@@ -27,22 +49,25 @@ def pairwise_distance(x):
     return dist.clamp(min=0.0)
 
 
-def knn(x, k):
+def knn(x, k, fast=False):
     """
     Поиск k ближайших соседей для каждой точки.
     Args:
-        x: (B, C, N)
-        k: число соседей
+        x:    (B, C, N)
+        k:    число соседей
+        fast: использовать torch_cluster (быстрее, особенно на GPU)
     Returns:
         idx: (B, N, k)
     """
+    if fast:
+        return _knn_torch_cluster(x, k)
     dist = pairwise_distance(x)
     # Для расстояний нужны минимальные значения, поэтому largest=False.
     _, idx = dist.topk(k=k, dim=-1, largest=False, sorted=True)
     return idx
 
 
-def get_graph_feature(x, k=20, idx=None):
+def get_graph_feature(x, k=20, idx=None, fast_knn=False):
     """
     Формирует edge-признаки для EdgeConv.
     Args:
@@ -54,7 +79,7 @@ def get_graph_feature(x, k=20, idx=None):
     """
     B, C, N = x.size()
     if idx is None:
-        idx = knn(x, k=k)  # (B, N, k)
+        idx = knn(x, k=k, fast=fast_knn)  # (B, N, k)
 
     device = x.device
     # Смещаем индексы по батчам, чтобы можно было брать соседей

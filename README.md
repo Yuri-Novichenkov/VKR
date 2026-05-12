@@ -64,7 +64,7 @@ python scripts/predictions.py --checkpoint checkpoints/pointnet/segmentation/mar
 ```
 **PointNet++ (сегментация):**
 ```bash
-python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --amp --num_points 4096 --batch_size 4 --lr 0.001 --epochs 100 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --num_points 4096 --batch_size 4 --lr 0.001 --epochs 100 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
 ```
 ```bash
 python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --num_points 4096 --batch_size 4 --lr 0.0005 --epochs 120 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42

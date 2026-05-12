@@ -11,14 +11,14 @@ import torch.nn.functional as F
 from ..utils.point_ops import get_graph_feature, EdgeConv, knn
 
 
-def _xyz_graph_idx(x, k):
+def _xyz_graph_idx(x, k, fast_knn=False):
     """
     kNN на первом слое должен строиться по геометрии (XYZ), а не по всем
     входным каналам (RGB/Intensity/returns). Иначе близкими «соседями»
     становятся точки с похожим цветом/интенсивностью из других частей сцены,
     что ломает локальность.
     """
-    return knn(x[:, :3, :].contiguous(), k=k)
+    return knn(x[:, :3, :].contiguous(), k=k, fast=fast_knn)
 
 
 class DGCNNSegmentation(nn.Module):
@@ -30,9 +30,10 @@ class DGCNNSegmentation(nn.Module):
     2) конкатенация multi-level признаков;
     3) point-wise классификатор.
     """
-    def __init__(self, num_classes, num_features=9, k=20, dropout=0.5):
+    def __init__(self, num_classes, num_features=9, k=20, dropout=0.5, fast_knn=False):
         super().__init__()
         self.k = k
+        self.fast_knn = fast_knn
         self.num_classes = num_classes
         self.num_features = num_features
 
@@ -60,11 +61,11 @@ class DGCNNSegmentation(nn.Module):
 
         # Первый слой — геометрический граф по XYZ; дальше — dynamic graph
         # в пространстве выученных фичей (стандарт DGCNN).
-        idx_xyz = _xyz_graph_idx(x, k=self.k)
-        x1 = self.ec1(get_graph_feature(x, k=self.k, idx=idx_xyz))
-        x2 = self.ec2(get_graph_feature(x1, k=self.k))
-        x3 = self.ec3(get_graph_feature(x2, k=self.k))
-        x4 = self.ec4(get_graph_feature(x3, k=self.k))
+        idx_xyz = _xyz_graph_idx(x, k=self.k, fast_knn=self.fast_knn)
+        x1 = self.ec1(get_graph_feature(x,  k=self.k, idx=idx_xyz,    fast_knn=self.fast_knn))
+        x2 = self.ec2(get_graph_feature(x1, k=self.k,                 fast_knn=self.fast_knn))
+        x3 = self.ec3(get_graph_feature(x2, k=self.k,                 fast_knn=self.fast_knn))
+        x4 = self.ec4(get_graph_feature(x3, k=self.k,                 fast_knn=self.fast_knn))
 
         x_cat = torch.cat((x1, x2, x3, x4), dim=1)  # (B, 512, N)
         x = self.conv1(x_cat)
@@ -89,9 +90,10 @@ class DGCNNClassification(nn.Module):
     После EdgeConv формируем глобальный дескриптор cloud-level
     через max-pooling + avg-pooling и классифицируем его FC-слоями.
     """
-    def __init__(self, num_classes, num_features=9, k=20, emb_dims=1024, dropout=0.5):
+    def __init__(self, num_classes, num_features=9, k=20, emb_dims=1024, dropout=0.5, fast_knn=False):
         super().__init__()
         self.k = k
+        self.fast_knn = fast_knn
         self.num_classes = num_classes
         self.num_features = num_features
 
@@ -118,11 +120,11 @@ class DGCNNClassification(nn.Module):
         x = x.transpose(2, 1).contiguous()  # (B, F, N)
 
         # Первый слой — геометрический kNN (XYZ), дальше — dynamic graph.
-        idx_xyz = _xyz_graph_idx(x, k=self.k)
-        x1 = self.ec1(get_graph_feature(x, k=self.k, idx=idx_xyz))
-        x2 = self.ec2(get_graph_feature(x1, k=self.k))
-        x3 = self.ec3(get_graph_feature(x2, k=self.k))
-        x4 = self.ec4(get_graph_feature(x3, k=self.k))
+        idx_xyz = _xyz_graph_idx(x, k=self.k, fast_knn=self.fast_knn)
+        x1 = self.ec1(get_graph_feature(x,  k=self.k, idx=idx_xyz, fast_knn=self.fast_knn))
+        x2 = self.ec2(get_graph_feature(x1, k=self.k,              fast_knn=self.fast_knn))
+        x3 = self.ec3(get_graph_feature(x2, k=self.k, fast_knn=self.fast_knn))
+        x4 = self.ec4(get_graph_feature(x3, k=self.k, fast_knn=self.fast_knn))
 
         x_cat = torch.cat((x1, x2, x3, x4), dim=1)  # (B, 512, N)
         x = self.conv1(x_cat)  # (B, emb_dims, N)

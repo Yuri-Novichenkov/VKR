@@ -117,10 +117,11 @@ class _LocalWindowAttention(nn.Module):
 
 
 class _MultiScaleEdgeConv(nn.Module):
-    def __init__(self, in_channels, out_channels, k_small=20, k_large=40):
+    def __init__(self, in_channels, out_channels, k_small=20, k_large=40, fast_knn=False):
         super().__init__()
-        self.k_small = k_small
-        self.k_large = k_large
+        self.k_small  = k_small
+        self.k_large  = k_large
+        self.fast_knn = fast_knn
         self.ec_small = EdgeConv(in_channels=in_channels, out_channels=out_channels)
         self.ec_large = EdgeConv(in_channels=in_channels, out_channels=out_channels)
         self.fuse = nn.Sequential(
@@ -135,8 +136,8 @@ class _MultiScaleEdgeConv(nn.Module):
         # захватывать локальные и более "широкие" контексты.
         # На первом слое idx_small/idx_large передаются явно (kNN по XYZ),
         # чтобы граф строился по геометрии, а не по RGB/Intensity.
-        x_small = self.ec_small(get_graph_feature(x, k=self.k_small, idx=idx_small))
-        x_large = self.ec_large(get_graph_feature(x, k=self.k_large, idx=idx_large))
+        x_small = self.ec_small(get_graph_feature(x, k=self.k_small, idx=idx_small, fast_knn=self.fast_knn))
+        x_large = self.ec_large(get_graph_feature(x, k=self.k_large, idx=idx_large, fast_knn=self.fast_knn))
         x = torch.cat([x_small, x_large], dim=1)
         x = self.fuse(x)
         return x
@@ -157,17 +158,19 @@ class LDGCNNSegmentation(nn.Module):
         attention_k=16,
         attention_heads=4,
         attention_dropout=0.1,
+        fast_knn=False,
     ):
         super().__init__()
         self.num_classes = num_classes
         self.num_features = num_features
         self.attention_type = attention_type.lower()
         self.attention_k = attention_k
+        self.fast_knn = fast_knn
 
-        self.ec1 = _MultiScaleEdgeConv(in_channels=2 * num_features, out_channels=64, k_small=k_small, k_large=k_large)
-        self.ec2 = _MultiScaleEdgeConv(in_channels=2 * 64, out_channels=64, k_small=k_small, k_large=k_large)
-        self.ec3 = _MultiScaleEdgeConv(in_channels=2 * 64, out_channels=128, k_small=k_small, k_large=k_large)
-        self.ec4 = _MultiScaleEdgeConv(in_channels=2 * 128, out_channels=256, k_small=k_small, k_large=k_large)
+        self.ec1 = _MultiScaleEdgeConv(in_channels=2 * num_features, out_channels=64, k_small=k_small, k_large=k_large, fast_knn=fast_knn)
+        self.ec2 = _MultiScaleEdgeConv(in_channels=2 * 64, out_channels=64, k_small=k_small, k_large=k_large, fast_knn=fast_knn)
+        self.ec3 = _MultiScaleEdgeConv(in_channels=2 * 64, out_channels=128, k_small=k_small, k_large=k_large, fast_knn=fast_knn)
+        self.ec4 = _MultiScaleEdgeConv(in_channels=2 * 128, out_channels=256, k_small=k_small, k_large=k_large, fast_knn=fast_knn)
         if self.attention_type == "gatv2":
             self.attention = _GATv2LocalAttention(64, heads=attention_heads, dropout=attention_dropout)
         elif self.attention_type == "local_window":
@@ -195,14 +198,14 @@ class LDGCNNSegmentation(nn.Module):
         # Первый слой — геометрический граф по XYZ, оба масштаба соседей;
         # дальше — dynamic graph в пространстве выученных фичей.
         xyz = x[:, :3, :].contiguous()
-        idx_small = knn(xyz, k=self.ec1.k_small)
-        idx_large = knn(xyz, k=self.ec1.k_large)
+        idx_small = knn(xyz, k=self.ec1.k_small, fast=self.fast_knn)
+        idx_large = knn(xyz, k=self.ec1.k_large, fast=self.fast_knn)
         x1 = self.ec1(x, idx_small=idx_small, idx_large=idx_large)
         x2 = self.ec2(x1)
         if self.attention is not None:
             # Внимание считается по локальной kNN-окрестности текущих признаков.
             k_local = min(self.attention_k, x2.shape[-1])
-            attn_idx = knn(x2, k=k_local)
+            attn_idx = knn(x2, k=k_local, fast=self.fast_knn)
             x2 = self.attn_norm(x2 + self.attention(x2, attn_idx))
         x3 = self.ec3(x2)
         x4 = self.ec4(x3)
@@ -239,17 +242,19 @@ class LDGCNNClassification(nn.Module):
         attention_k=16,
         attention_heads=4,
         attention_dropout=0.1,
+        fast_knn=False,
     ):
         super().__init__()
         self.num_classes = num_classes
         self.num_features = num_features
         self.attention_type = attention_type.lower()
         self.attention_k = attention_k
+        self.fast_knn = fast_knn
 
-        self.ec1 = _MultiScaleEdgeConv(in_channels=2 * num_features, out_channels=64, k_small=k_small, k_large=k_large)
-        self.ec2 = _MultiScaleEdgeConv(in_channels=2 * 64, out_channels=64, k_small=k_small, k_large=k_large)
-        self.ec3 = _MultiScaleEdgeConv(in_channels=2 * 64, out_channels=128, k_small=k_small, k_large=k_large)
-        self.ec4 = _MultiScaleEdgeConv(in_channels=2 * 128, out_channels=256, k_small=k_small, k_large=k_large)
+        self.ec1 = _MultiScaleEdgeConv(in_channels=2 * num_features, out_channels=64, k_small=k_small, k_large=k_large, fast_knn=fast_knn)
+        self.ec2 = _MultiScaleEdgeConv(in_channels=2 * 64, out_channels=64, k_small=k_small, k_large=k_large, fast_knn=fast_knn)
+        self.ec3 = _MultiScaleEdgeConv(in_channels=2 * 64, out_channels=128, k_small=k_small, k_large=k_large, fast_knn=fast_knn)
+        self.ec4 = _MultiScaleEdgeConv(in_channels=2 * 128, out_channels=256, k_small=k_small, k_large=k_large, fast_knn=fast_knn)
         if self.attention_type == "gatv2":
             self.attention = _GATv2LocalAttention(64, heads=attention_heads, dropout=attention_dropout)
         elif self.attention_type == "local_window":
@@ -276,13 +281,13 @@ class LDGCNNClassification(nn.Module):
 
         # Первый слой — геометрический граф по XYZ, дальше — dynamic graph.
         xyz = x[:, :3, :].contiguous()
-        idx_small = knn(xyz, k=self.ec1.k_small)
-        idx_large = knn(xyz, k=self.ec1.k_large)
+        idx_small = knn(xyz, k=self.ec1.k_small, fast=self.fast_knn)
+        idx_large = knn(xyz, k=self.ec1.k_large, fast=self.fast_knn)
         x1 = self.ec1(x, idx_small=idx_small, idx_large=idx_large)
         x2 = self.ec2(x1)
         if self.attention is not None:
             k_local = min(self.attention_k, x2.shape[-1])
-            attn_idx = knn(x2, k=k_local)
+            attn_idx = knn(x2, k=k_local, fast=self.fast_knn)
             x2 = self.attn_norm(x2 + self.attention(x2, attn_idx))
         x3 = self.ec3(x2)
         x4 = self.ec4(x3)

@@ -28,6 +28,7 @@ def build_model(
     attention_dropout: float = 0.1,
     pt_k: int = 16,
     pt_channels: tuple = (32, 64, 128, 256, 512),
+    fast_knn: bool = False,
 ):
     """Создаёт модель по строковому имени архитектуры и задачи.
 
@@ -66,7 +67,7 @@ def build_model(
 
     if model_type == "dgcnn":
         cls = DGCNNSegmentation if seg else DGCNNClassification
-        return cls(num_classes=num_classes, num_features=num_features, k=k)
+        return cls(num_classes=num_classes, num_features=num_features, k=k, fast_knn=fast_knn)
 
     if model_type == "ldgcnn":
         ldgcnn_kwargs = dict(
@@ -78,6 +79,7 @@ def build_model(
             attention_k=attention_k,
             attention_heads=attention_heads,
             attention_dropout=attention_dropout,
+            fast_knn=fast_knn,
         )
         cls = LDGCNNSegmentation if seg else LDGCNNClassification
         return cls(**ldgcnn_kwargs)
@@ -88,6 +90,7 @@ def build_model(
             num_features=num_features,
             k=pt_k,
             channels=pt_channels,
+            fast_knn=fast_knn,
         )
         cls = PointTransformerSegmentation if seg else PointTransformerClassification
         return cls(**pt_kwargs)
@@ -100,6 +103,7 @@ def build_model(
             k=k,
             num_heads=attention_heads,
             dropout=attention_dropout,
+            fast_knn=fast_knn,
         )
 
     raise ValueError(f"Неизвестная архитектура: {model_type!r}.")
