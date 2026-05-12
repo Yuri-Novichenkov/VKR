@@ -2,72 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
-
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
-
-## 1. Think Before Coding
-
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
-
-## 2. Simplicity First
-
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
----
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-
----
-
 ## Project: LiDAR 3D Semantic Segmentation (ВКР)
 
 **Dataset:** Hessigheim 3D (H3D) — UAV LiDAR, 11 classes, ~1.4M points per split.
@@ -78,6 +12,19 @@ GroundTruth test file has labels (`Mar16_test_GroundTruth.laz`); plain test file
 **MLflow:** All metrics stored in `sqlite:///mlflow.db`. UI:
 ```bash
 mlflow ui --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns
+```
+
+### Setup
+
+```bash
+# Install core dependencies
+pip install -r requirements.txt
+
+# Install dev/analysis tools (profiling, ONNX export, torch_cluster)
+pip install -r requirements-dev.txt
+
+# PyTorch must be installed separately for your CUDA version
+# See https://pytorch.org/get-started/locally/
 ```
 
 ### Key Commands
@@ -110,6 +57,9 @@ python scripts/benchmark_inference.py --all_mar16 \
   --modes fp32 fp16 compile_fp32 compile_fp16 --batch_size 1 \
   --output_csv results/benchmark_gpu.csv
 
+# k-neighbor sensitivity analysis (speed vs. accuracy tradeoff across models)
+python scripts/k_sensitivity.py
+
 # Sweep (comparison across models/datasets)
 python scripts/run_sweep.py --config configs/sweeps/loss_sweep_all_models.yaml
 python scripts/run_sweep.py --config configs/sweeps/comparison_mar18.yaml --resume --only_model "LDGCNNFlash"
@@ -129,11 +79,17 @@ python scripts/run_sweep.py --config configs/sweeps/comparison_mar18.yaml --resu
 | `ldgcnn_flash` | `LDGCNNFlashSegmentation` | Custom (ВКР): LDGCNN + Flash Self-Attention (SDPA) |
 
 All models share the same `get_loss(predictions, targets, class_weights)` interface.
+`build_model()` is the single source of truth — all scripts use it to prevent train/test divergence.
+
+**Utilities** (`src/utils/`):
+- `point_ops.py`: `knn(x, k, fast=False)`, `get_graph_feature(x, k, idx, fast_knn)`, `EdgeConv` — shared graph convolution primitives used by DGCNN, LDGCNN, and LDGCNNFlash
+- `metrics.py`: `calculate_metrics(predictions, targets, num_classes, task)` — returns mIoU per class for segmentation, accuracy for classification
 
 **Data pipeline** (`src/data/dataset.py` → `LiDARDataset`):
-- Reads `.txt`/`.las`/`.laz` via `src/data/io.py`
+- Reads `.txt`/`.las`/`.laz` via `src/data/io.py:load_dataframe()`
 - Splits scene into overlapping windows of `num_points` points
 - Caches point-cloud arrays to disk (`cache_dir`, modes: `off`/`read`/`write`, chunked or monolithic)
+- Normalization: z-score computed on train, stored in `self.normalize_stats`, passed to val/test via `normalize_stats=` arg
 - At test/prediction time, `get_cloud_point_indices(sample_idx)` returns original point indices for **voting**: each point collects votes from all windows it appears in, final label = argmax
 
 **Voting** is critical for correct segmentation metrics — without it, boundary points are counted multiple times. `test.py` and `predictions.py` both use voting via `vote_counts` accumulation.
@@ -145,6 +101,9 @@ All models share the same `get_loss(predictions, targets, class_weights)` interf
 - `--resume`: skips runs where `metrics.json` already exists in output dir
 - `--only_model "<display_name>"`: runs only one model (for 24-hour server limit)
 - Matrix mode writes to `output_root:` from YAML (comparison sweeps → `experiments/comparison/`)
+
+**Best hyperparameters** per model are in `configs/best_params.yaml`. Rankings on Mar16 (mIoU):
+LDGCNN-GATv2 (0.5544) > LDGCNN-LocalWindow (0.5505) > LDGCNN (0.5476) > DGCNN (0.5313) > PointNet++ (0.4915) > PointNet (0.4247)
 
 ### Critical AMP / FP16 Bugs (already fixed, do not revert)
 

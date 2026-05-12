@@ -109,10 +109,12 @@ def bench_cpu(model, num_features):
 
 
 def apply_int8(model):
-    """Dynamic INT8 quantization: квантует Linear и Conv1d слои."""
+    """Dynamic INT8 quantization: квантует Linear, Conv1d и Conv2d слои.
+    Conv2d критичен для EdgeConv-based моделей (DGCNN/LDGCNN/LDGCNNFlash).
+    """
     return torch.quantization.quantize_dynamic(
         model,
-        {torch.nn.Linear, torch.nn.Conv1d},
+        {torch.nn.Linear, torch.nn.Conv1d, torch.nn.Conv2d},
         dtype=torch.qint8,
     )
 
@@ -168,13 +170,27 @@ for label, mtype, path in CONFIGS:
     })
 
 # ── Консольная таблица ────────────────────────────────────────────────────────
+def _fmt(val, fmt):
+    """Форматирует число или возвращает '—' для строк/None/nan."""
+    if val is None:
+        return "—"
+    if isinstance(val, str):
+        return val
+    try:
+        if val != val:  # nan
+            return "—"
+        return format(val, fmt)
+    except (TypeError, ValueError):
+        return str(val)
+
 print("\n\n" + "="*90)
 print(f"{'Модель':<16} {'FP32':>8} {'FP32+fkNN':>10} {'x':>5} {'FP16+fkNN':>10} {'x':>5} {'INT8(CPU)':>10} {'x':>5}")
 print("-"*90)
 for r in results:
-    print(f"{r['model']:<16} {r['fp32_ms']:>8.2f} {r['fp32_fk_ms']:>10.2f} {r['fp32_fk_x']:>5.2f}"
-          f" {r['fp16_fk_ms']:>10.2f} {r['fp16_fk_x']:>5.2f}"
-          f" {r['int8_cpu_ms']:>10.1f} {r['int8_x']:>5.2f}")
+    print(f"{r['model']:<16} {_fmt(r['fp32_ms'],'.2f'):>8}"
+          f" {_fmt(r['fp32_fk_ms'],'.2f'):>10} {_fmt(r['fp32_fk_x'],'.2f'):>5}"
+          f" {_fmt(r['fp16_fk_ms'],'.2f'):>10} {_fmt(r['fp16_fk_x'],'.2f'):>5}"
+          f" {_fmt(r['int8_cpu_ms'],'.1f'):>10} {_fmt(r['int8_x'],'.2f'):>5}")
 
 # ── Excel ─────────────────────────────────────────────────────────────────────
 from openpyxl import Workbook

@@ -78,7 +78,7 @@ def _build_from_ckpt(ckpt: dict, device: torch.device) -> torch.nn.Module:
         attention_dropout=ckpt.get("attention_dropout", 0.1),
         pt_k=ckpt.get("pt_k", 16),
     )
-    model.load_state_dict(ckpt["model_state_dict"])
+    model.load_state_dict(ckpt["model_state_dict"], strict=False)
     model.to(device)
     model.eval()
     return model
@@ -255,9 +255,13 @@ def benchmark_checkpoint(ckpt_path: str, modes: list[str],
                     dtype = torch.float32
 
                 if "compile" in mode:
-                    # backend='eager' работает везде (нет зависимости от triton/Windows)
-                    # backend='inductor' быстрее, но требует Linux + triton
-                    compile_backend = "inductor" if sys.platform != "win32" else "eager"
+                    # inductor (Linux/triton) даёт реальную компиляцию.
+                    # aot_eager (Windows) — AOT-граф без triton, даёт умеренный прирост.
+                    # backend='eager' — псевдоним обычного eager-режима, не компилирует ничего.
+                    if sys.platform == "win32":
+                        compile_backend = "aot_eager"
+                    else:
+                        compile_backend = "inductor"
                     model = torch.compile(model, backend=compile_backend)
                     print(f"(compile backend={compile_backend}) ", end="", flush=True)
 
