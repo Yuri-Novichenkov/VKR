@@ -136,6 +136,7 @@ def main():
     attention_heads = checkpoint.get("attention_heads", 4)
     attention_dropout = checkpoint.get("attention_dropout", 0.1)
     pt_k = checkpoint.get("pt_k", 16)
+    flash_channels = tuple(checkpoint.get("flash_channels", (64, 128, 256)))
     class_to_idx = checkpoint.get("class_to_idx")
     normalize_stats = checkpoint.get("normalize_stats")
 
@@ -152,6 +153,7 @@ def main():
         attention_heads=attention_heads,
         attention_dropout=attention_dropout,
         pt_k=pt_k,
+        flash_channels=flash_channels,
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)

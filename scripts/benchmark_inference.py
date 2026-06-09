@@ -64,6 +64,10 @@ def _load_checkpoint(ckpt_path: str, device: torch.device) -> dict:
 
 
 def _build_from_ckpt(ckpt: dict, device: torch.device) -> torch.nn.Module:
+    # flash_channels может быть list (как сохраняется train.py) или tuple
+    raw_fc = ckpt.get("flash_channels", (64, 128, 256))
+    flash_channels = tuple(raw_fc) if not isinstance(raw_fc, tuple) else raw_fc
+
     model = build_model(
         model_type=ckpt.get("model_type", "pointnet"),
         task=ckpt.get("task", "segmentation"),
@@ -77,8 +81,9 @@ def _build_from_ckpt(ckpt: dict, device: torch.device) -> torch.nn.Module:
         attention_heads=ckpt.get("attention_heads", 4),
         attention_dropout=ckpt.get("attention_dropout", 0.1),
         pt_k=ckpt.get("pt_k", 16),
+        flash_channels=flash_channels,
     )
-    model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    model.load_state_dict(ckpt["model_state_dict"], strict=True)
     model.to(device)
     model.eval()
     return model

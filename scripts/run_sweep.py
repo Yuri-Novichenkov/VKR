@@ -55,6 +55,11 @@ def _determine_sweep_mode(cfg: dict) -> str:
     has_batch_sizes = bool(cfg.get("batch_sizes"))
     has_betas = bool(cfg.get("class_balance_betas"))
 
+    has_runs = bool(cfg.get("runs"))
+
+    if has_runs:
+        return "runs"
+
     if has_models and has_loss_configs:
         if has_batch_sizes or has_betas:
             raise ValueError(
@@ -72,7 +77,7 @@ def _determine_sweep_mode(cfg: dict) -> str:
     if has_betas:
         return "class_balance_beta"
     raise ValueError(
-        "config должен задавать либо (models + loss_configs), "
+        "config должен задавать либо runs, либо (models + loss_configs), "
         "либо batch_sizes, либо class_balance_betas."
     )
 
@@ -90,10 +95,15 @@ def _slug_value_single(axis: str, value) -> str:
 
 def _experiment_dir_suffix(cfg: dict) -> str:
     """Суффикс имени папки эксперимента без временной метки."""
-    model = _slug(cfg.get("model", cfg.get("models", [{}])[0].get("model", "model")))
     dataset = _slug(cfg.get("dataset", "dataset"))
     exp_name = _slug(cfg.get("experiment_name", "sweep"))
     run_group = _slug(cfg.get("run_group", "default"))
+    # В matrix-режиме (models × loss_configs) моделей несколько — имя первой модели
+    # в суффиксе вводит в заблуждение. Используем только run_group.
+    if cfg.get("models"):
+        return f"{exp_name}_{dataset}_{run_group}"
+    # В single-axis режиме модель одна — включаем её имя.
+    model = _slug(cfg.get("model", "model"))
     return f"{exp_name}_{model}_{dataset}_{run_group}"
 
 
@@ -168,6 +178,12 @@ def _build_train_command(
             continue
         if value is None:
             continue
+        if isinstance(value, list):
+            # nargs-аргументы (например flash_channels): передаём каждый элемент отдельно
+            cmd.append(flag)
+            for item in value:
+                cmd.append(str(item))
+            continue
         cmd.append(flag)
         cmd.append(_format_cli_value(value))
     return cmd
@@ -211,8 +227,15 @@ def _write_summary(rows: list[dict], out_path: Path) -> None:
 
 
 def _run_matrix_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, dry_run,
-                      resume: bool = False, only_model: str | None = None):
-    """Запускает полную матрицу models × loss_configs."""
+                      only_model: str | None = None):
+    """Запускает полную матрицу models × loss_configs.
+
+    Поведение при рестарте (всегда авто):
+    - Если metrics JSON существует → модель уже готова, пропускаем.
+    - Если .ckpt-файл существует (train.py писал его каждую эпоху) → модель была
+      прервана, передаём --resume <last_checkpoint.pth> в train.py автоматически.
+    - Иначе → запускаем с нуля.
+    """
     models_list = cfg["models"]          # [{model, task?, train_args?}, ...]
     loss_configs = cfg["loss_configs"]   # [{name, loss_type, ...}, ...]
     summary_rows = []
@@ -247,10 +270,11 @@ def _run_matrix_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, dr
             )
             log_path = logs_dir / f"train_{slug}.log"
             metrics_path = metrics_dir / f"metrics_{slug}.json"
+            state_path = metrics_path.with_suffix('.ckpt')
 
-            # --resume: пропускаем уже завершённые запуски
-            if resume and metrics_path.exists():
-                print(f"[{run_idx}/{total}] model={model_display_name}, loss={lc_name}  [SKIP — already done]")
+            # ── Уже завершено: пропускаем ─────────────────────────────────────
+            if metrics_path.exists():
+                print(f"[{run_idx}/{total}] model={model_display_name}  [DONE — пропускаем]")
                 if not dry_run:
                     data = _read_metrics(metrics_path)
                     row = {
@@ -279,22 +303,42 @@ def _run_matrix_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, dr
                     summary_rows.append(row)
                 continue
 
+            # ── Авто-возобновление прерванного обучения ───────────────────────
+            extra_args = dict(loss_extra)
+            if state_path.exists():
+                last_ckpt = state_path.read_text(encoding='utf-8').strip()
+                if Path(last_ckpt).exists():
+                    extra_args['resume'] = last_ckpt
+                    print(f"[{run_idx}/{total}] model={model_display_name}  "
+                          f"[AUTO-RESUME с эпохи → {Path(last_ckpt).parent.name}/{Path(last_ckpt).name}]")
+                else:
+                    print(f"[{run_idx}/{total}] model={model_display_name}  "
+                          f"[WARN: .ckpt указывает на несуществующий файл, старт с нуля]")
+                    print(f"[{run_idx}/{total}] model={model_display_name}")
+            else:
+                print(f"[{run_idx}/{total}] model={model_display_name}")
+
             cmd = _build_train_command(
                 cfg,
                 python_executable,
-                extra_args=loss_extra,
+                extra_args=extra_args,
                 run_name=run_name,
                 metrics_json_path=metrics_path,
                 model_override=model_cfg,
             )
 
-            print(f"[{run_idx}/{total}] model={model_display_name}, loss={lc_name}")
             if dry_run:
                 print("  [DRY RUN]", " ".join(cmd))
                 continue
 
             t0 = time.perf_counter()
-            return_code = _run_one(cmd, log_path)
+            try:
+                return_code = _run_one(cmd, log_path)
+            except KeyboardInterrupt:
+                print(f"\n  [INTERRUPT] Обучение {model_display_name} прервано. "
+                      f"Запустите ту же команду чтобы продолжить.")
+                _write_summary(summary_rows, exp_dir / "runs_summary.csv")
+                raise
             wall_time_sec = float(time.perf_counter() - t0)
 
             row = {
@@ -327,6 +371,125 @@ def _run_matrix_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, dr
             else:
                 print(f"  FAILED (code={return_code}) -> {log_path}")
             summary_rows.append(row)
+
+    return summary_rows
+
+
+# ─────────────────────────── runs sweep ───────────────────────────────────
+
+
+def _run_runs_sweep(cfg, exp_dir, logs_dir, metrics_dir, python_executable, dry_run,
+                    only_model=None):
+    """Запускает список независимых runs из cfg['runs'].
+
+    Каждый run содержит:
+        name:         уникальный идентификатор (используется в именах файлов)
+        display_name: отображаемое имя (для --only_model)
+        params:       словарь аргументов train.py (поддерживает bool и list)
+    """
+    runs_list = cfg["runs"]
+    train_script = cfg.get("train_script", "scripts/train.py")
+    summary_rows = []
+    total = len(runs_list)
+
+    for run_idx, run_cfg in enumerate(runs_list, 1):
+        run_name = run_cfg.get("name", f"run_{run_idx}")
+        display_name = run_cfg.get("display_name", run_name)
+        params = dict(run_cfg.get("params", {}))
+
+        if only_model is not None and display_name != only_model:
+            print(f"  [{run_idx}/{total}] {display_name}  [SKIP]")
+            continue
+
+        slug = _slug(run_name)
+        log_path = logs_dir / f"train_{slug}.log"
+        metrics_path = metrics_dir / f"metrics_{slug}.json"
+        state_path = metrics_path.with_suffix('.ckpt')
+
+        if metrics_path.exists():
+            print(f"[{run_idx}/{total}] {display_name}  [DONE — пропускаем]")
+            if not dry_run:
+                data = _read_metrics(metrics_path)
+                summary_rows.append({
+                    "run": display_name,
+                    "return_code": 0,
+                    "log_path": str(log_path),
+                    "metrics_path": str(metrics_path),
+                    "best_val_metric": data.get("best_val_metric"),
+                    "best_epoch": data.get("best_epoch"),
+                    "total_train_time_sec": data.get("total_train_time_sec"),
+                    "mean_epoch_time_sec": data.get("mean_epoch_time_sec"),
+                    "max_peak_vram_mb": data.get("max_peak_vram_mb"),
+                    "best_val_miou": data.get("best_val_miou"),
+                    "final_val_miou": data.get("final_val_miou"),
+                })
+            continue
+
+        # Авто-возобновление прерванного обучения
+        extra = {}
+        if state_path.exists():
+            last_ckpt = state_path.read_text(encoding='utf-8').strip()
+            if Path(last_ckpt).exists():
+                extra['resume'] = last_ckpt
+                print(f"[{run_idx}/{total}] {display_name}  [AUTO-RESUME]")
+            else:
+                print(f"[{run_idx}/{total}] {display_name}")
+        else:
+            print(f"[{run_idx}/{total}] {display_name}")
+
+        # Собираем команду: params + служебные ключи
+        merged = {**params, **extra, "run_name": run_name, "metrics_json_path": str(metrics_path)}
+        cmd = [python_executable, train_script]
+        for key, value in merged.items():
+            flag = f"--{key}"
+            if isinstance(value, bool):
+                if value:
+                    cmd.append(flag)
+                continue
+            if value is None:
+                continue
+            if isinstance(value, list):
+                cmd.append(flag)
+                for item in value:
+                    cmd.append(str(item))
+                continue
+            cmd.append(flag)
+            cmd.append(str(value))
+
+        if dry_run:
+            print("  [DRY RUN]", " ".join(cmd))
+            continue
+
+        t0 = time.perf_counter()
+        try:
+            return_code = _run_one(cmd, log_path)
+        except KeyboardInterrupt:
+            print(f"\n  [INTERRUPT] {display_name} прерван. Запустите ту же команду для продолжения.")
+            _write_summary(summary_rows, exp_dir / "runs_summary.csv")
+            raise
+        wall_time = float(time.perf_counter() - t0)
+
+        row = {
+            "run": display_name,
+            "return_code": return_code,
+            "wall_time_sec": wall_time,
+            "log_path": str(log_path),
+            "metrics_path": str(metrics_path),
+        }
+        if return_code == 0 and metrics_path.exists():
+            data = _read_metrics(metrics_path)
+            row.update({
+                "best_val_metric": data.get("best_val_metric"),
+                "best_epoch": data.get("best_epoch"),
+                "total_train_time_sec": data.get("total_train_time_sec"),
+                "mean_epoch_time_sec": data.get("mean_epoch_time_sec"),
+                "max_peak_vram_mb": data.get("max_peak_vram_mb"),
+                "best_val_miou": data.get("best_val_miou"),
+                "final_val_miou": data.get("final_val_miou"),
+            })
+        else:
+            print(f"  FAILED (code={return_code}) -> {log_path}")
+        summary_rows.append(row)
 
     return summary_rows
 
@@ -403,7 +566,10 @@ def _run_single_axis_sweep(cfg, sweep_axis, sweep_values, exp_dir, logs_dir, met
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run sweep from YAML config (batch_sizes, class_balance_betas, or models × loss_configs)"
+        description="Run sweep from YAML config.\n"
+                    "Matrix mode: запускает все модели последовательно.\n"
+                    "Повторный запуск той же команды автоматически продолжает с того места,\n"
+                    "где остановился (пропускает завершённые, возобновляет прерванные)."
     )
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
     parser.add_argument(
@@ -421,17 +587,16 @@ def main():
     parser.add_argument("--no_auto_plot", action="store_true", help="Disable automatic plotting after sweep")
     parser.add_argument("--dry_run", action="store_true", help="Only print commands, do not run")
     parser.add_argument(
-        "--resume",
+        "--fresh",
         action="store_true",
-        help="Пропускать уже завершённые запуски (metrics JSON уже существует). "
-             "Позволяет продолжить прерванный sweep с того места, где остановился.",
+        help="Принудительно создать новую папку эксперимента, игнорируя существующую. "
+             "Используй если хочешь начать заново, а не продолжить предыдущий запуск.",
     )
     parser.add_argument(
         "--only_model",
         type=str,
         default=None,
-        help="Запустить только модель с данным именем (model display name из YAML). "
-             "Удобно для последовательного запуска по одной модели.",
+        help="Запустить только модель с данным именем (model display name из YAML).",
     )
     args = parser.parse_args()
 
@@ -445,7 +610,6 @@ def main():
     python_executable = args.python_executable or cfg.get("python_executable") or sys.executable
 
     # Определяем output_root
-    # Приоритет: --output_root CLI > output_root в YAML > дефолт по режиму
     cfg_output_root = cfg.get("output_root")
     if args.output_root:
         output_root = (ROOT / args.output_root).resolve()
@@ -462,22 +626,18 @@ def main():
         logs_dir = exp_dir / "logs"
         metrics_dir = exp_dir / "metrics"
         plots_dir = exp_dir / "plots"
-    elif args.resume:
-        # --resume: ищем последнюю существующую папку для данного конфига
-        exp_dir = _find_latest_experiment_dir(output_root, cfg)
-        if exp_dir is None:
-            print("  [RESUME] Не найдена существующая папка — создаём новую.")
-            exp_dir = _build_experiment_dir(output_root, cfg)
-        else:
-            print(f"  [RESUME] Продолжаем эксперимент: {exp_dir}")
-        logs_dir = exp_dir / "logs"
-        metrics_dir = exp_dir / "metrics"
-        plots_dir = exp_dir / "plots"
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        metrics_dir.mkdir(parents=True, exist_ok=True)
-        plots_dir.mkdir(parents=True, exist_ok=True)
     else:
-        exp_dir = _build_experiment_dir(output_root, cfg)
+        # Авто-определение папки: продолжаем существующий эксперимент если он есть,
+        # иначе создаём новый. --fresh форсирует новую папку.
+        existing = None if args.fresh else _find_latest_experiment_dir(output_root, cfg)
+        if existing is not None:
+            exp_dir = existing
+            print(f"  [CONTINUE] Продолжаем эксперимент: {exp_dir.name}")
+        else:
+            if args.fresh:
+                print("  [FRESH] Создаём новую папку (--fresh).")
+            exp_dir = _build_experiment_dir(output_root, cfg)
+            print(f"  [NEW] Новый эксперимент: {exp_dir.name}")
         logs_dir = exp_dir / "logs"
         metrics_dir = exp_dir / "metrics"
         plots_dir = exp_dir / "plots"
@@ -495,23 +655,33 @@ def main():
 
     print(f"Sweep output directory: {exp_dir}")
 
-    if sweep_mode == "matrix":
-        summary_rows = _run_matrix_sweep(
-            cfg, exp_dir, logs_dir, metrics_dir, python_executable, args.dry_run,
-            resume=args.resume, only_model=args.only_model,
-        )
-    else:
-        # single-axis mode
-        bs_vals = cfg.get("batch_sizes")
-        beta_vals = cfg.get("class_balance_betas")
-        if bs_vals:
-            sweep_values = [int(v) for v in bs_vals]
+    try:
+        if sweep_mode == "runs":
+            summary_rows = _run_runs_sweep(
+                cfg, exp_dir, logs_dir, metrics_dir, python_executable, args.dry_run,
+                only_model=args.only_model,
+            )
+        elif sweep_mode == "matrix":
+            summary_rows = _run_matrix_sweep(
+                cfg, exp_dir, logs_dir, metrics_dir, python_executable, args.dry_run,
+                only_model=args.only_model,
+            )
         else:
-            sweep_values = [float(v) for v in beta_vals]
-        print(f"Sweep axis: {sweep_mode}, values: {sweep_values}")
-        summary_rows = _run_single_axis_sweep(
-            cfg, sweep_mode, sweep_values, exp_dir, logs_dir, metrics_dir, python_executable, args.dry_run
-        )
+            # single-axis mode
+            bs_vals = cfg.get("batch_sizes")
+            beta_vals = cfg.get("class_balance_betas")
+            if bs_vals:
+                sweep_values = [int(v) for v in bs_vals]
+            else:
+                sweep_values = [float(v) for v in beta_vals]
+            print(f"Sweep axis: {sweep_mode}, values: {sweep_values}")
+            summary_rows = _run_single_axis_sweep(
+                cfg, sweep_mode, sweep_values, exp_dir, logs_dir, metrics_dir,
+                python_executable, args.dry_run,
+            )
+    except KeyboardInterrupt:
+        print("\n[SWEEP INTERRUPT] Sweep прерван. Запустите ту же команду чтобы продолжить.")
+        return
 
     if args.dry_run:
         return

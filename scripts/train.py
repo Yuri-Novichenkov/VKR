@@ -135,9 +135,13 @@ def train_epoch(
     class_weights=None,
     loss_type="ce",
     focal_gamma=2.0,
+    teacher_model=None,
+    kd_alpha=0.5,
+    kd_temperature=4.0,
 ):
     model.train()
     total_loss = 0
+    total_kd_loss = 0.0
     all_predictions = []
     all_targets = []
 
@@ -145,6 +149,12 @@ def train_epoch(
     for features, labels in pbar:
         features = features.float().to(device)
         labels = labels.long().to(device)
+
+        # Учитель: FP32, без градиентов, вне autocast
+        t_logits = None
+        if teacher_model is not None:
+            with torch.no_grad():
+                t_logits = teacher_model(features)
 
         with autocast_context(use_amp):
             if task == "classification":
@@ -272,6 +282,17 @@ def train_epoch(
                         reg_loss = torch.tensor(0.0, device=predictions.device)
                     else:
                         raise ValueError(f"Неизвестный loss_type: {loss_type}")
+
+                    # Knowledge Distillation (только для не-pointnet сегментации)
+                    if t_logits is not None:
+                        _T = kd_temperature
+                        _B, _N, _C = predictions.shape
+                        s_log = F.log_softmax(predictions.float().reshape(-1, _C) / _T, dim=-1)
+                        t_prb = F.softmax(t_logits.float().reshape(-1, _C) / _T, dim=-1)
+                        kd_loss_val = F.kl_div(s_log, t_prb, reduction='batchmean') * (_T ** 2)
+                        loss = (1.0 - kd_alpha) * loss + kd_alpha * kd_loss_val
+                        total_kd_loss += float(kd_loss_val.item())
+
                 pred_classes = torch.argmax(predictions, dim=2)
 
         # NaN-guard: ловим расхождение как можно раньше. Без этого молчаливый
@@ -309,12 +330,16 @@ def train_epoch(
             postfix["ce_loss"] = f"{ce_loss.item():.4f}"
         if reg_loss is not None and reg_loss.numel() > 0:
             postfix["reg_loss"] = f"{reg_loss.item():.4f}"
+        if t_logits is not None:
+            postfix["kd_loss"] = f"{total_kd_loss / max(1, pbar.n + 1):.4f}"
         pbar.set_postfix(postfix)
 
     all_predictions = torch.cat(all_predictions, dim=0)
     all_targets = torch.cat(all_targets, dim=0)
     metrics = calculate_metrics(all_predictions, all_targets, num_classes, task=task)
     metrics["loss"] = total_loss / len(train_loader)
+    if teacher_model is not None:
+        metrics["kd_loss"] = total_kd_loss / len(train_loader)
     return metrics
 
 
@@ -645,14 +670,50 @@ def build_train_run_name(args):
     parts = [args.model, args.task, args.dataset.lower()]
     if args.model == "ldgcnn" and args.attention_type != "none":
         parts.append(f"attn-{args.attention_type}")
+    if args.model == "ldgcnn_flash" and tuple(args.flash_channels) != (64, 128, 256):
+        parts.append(f"ch{'_'.join(map(str, args.flash_channels))}")
     if args.loss_type != "ce":
         parts.append(args.loss_type)
     if args.class_balance != "none":
         parts.append(f"cb-{args.class_balance}")
+    if args.kd_teacher_checkpoint:
+        parts.append(f"kd-a{args.kd_alpha}-T{args.kd_temperature}")
     parts.append(f"pts{args.num_points}")
     parts.append(f"bs{args.batch_size}")
     parts.append(f"seed{args.seed}")
     return "__".join(parts)
+
+
+def load_teacher(checkpoint_path: str, device: torch.device):
+    """Загружает учителя из чекпоинта и замораживает веса."""
+    ckpt = torch.load(checkpoint_path, weights_only=False)
+    teacher = build_model(
+        model_type=ckpt["model_type"],
+        task=ckpt["task"],
+        num_classes=ckpt["num_classes"],
+        num_features=ckpt["num_features"],
+        k=ckpt.get("k", 20),
+        k_small=ckpt.get("k_small", 20),
+        k_large=ckpt.get("k_large", 40),
+        attention_type=ckpt.get("attention_type", "none"),
+        attention_k=ckpt.get("attention_k", 16),
+        attention_heads=ckpt.get("attention_heads", 4),
+        attention_dropout=ckpt.get("attention_dropout", 0.1),
+        pt_k=ckpt.get("pt_k", 16),
+        pt_channels=tuple(ckpt.get("pt_channels", (32, 64, 128, 256, 512))),
+        flash_channels=tuple(ckpt.get("flash_channels", (64, 128, 256))),
+    ).to(device)
+    teacher.load_state_dict(ckpt["model_state_dict"])
+    teacher.eval()
+    for p in teacher.parameters():
+        p.requires_grad_(False)
+    logger.info(
+        "Учитель загружен: %s (%s), %.1fM параметров",
+        ckpt["model_type"],
+        checkpoint_path,
+        sum(p.numel() for p in teacher.parameters()) / 1e6,
+    )
+    return teacher
 
 
 def main():
@@ -745,6 +806,34 @@ def main():
         action="store_true",
         help="Включить строгую воспроизводимость (обычно медленнее на GPU)",
     )
+    # ── LDGCNNFlash architecture ──────────────────────────────────────────────
+    parser.add_argument(
+        "--flash_channels",
+        type=int,
+        nargs=3,
+        default=[64, 128, 256],
+        metavar=("C1", "C2", "C3"),
+        help="Размеры каналов по стадиям для LDGCNNFlash (default: 64 128 256; small: 32 64 128)",
+    )
+    # ── Knowledge Distillation ────────────────────────────────────────────────
+    parser.add_argument(
+        "--kd_teacher_checkpoint",
+        type=str,
+        default=None,
+        help="Путь к чекпоинту учителя для Knowledge Distillation (любая модель)",
+    )
+    parser.add_argument(
+        "--kd_alpha",
+        type=float,
+        default=0.5,
+        help="Вес KD loss в итоговом лоссе: L = (1-α)*L_task + α*T²*KL (default 0.5)",
+    )
+    parser.add_argument(
+        "--kd_temperature",
+        type=float,
+        default=4.0,
+        help="Температура дистилляции T — сглаживает распределения учителя/студента (default 4.0)",
+    )
 
     args = parser.parse_args()
     if args.loss_type == "cb_focal" and args.class_balance == "none":
@@ -778,12 +867,18 @@ def main():
             variant_parts.append(
                 f"attn_{args.attention_type}_k{args.attention_k}_h{args.attention_heads}_d{attn_dropout_str}"
             )
+        if args.model == "ldgcnn_flash" and tuple(args.flash_channels) != (64, 128, 256):
+            variant_parts.append(f"ch{'_'.join(map(str, args.flash_channels))}")
         if args.loss_type != "ce":
             gamma_str = str(args.focal_gamma).replace(".", "p")
             variant_parts.append(f"loss_{args.loss_type}_g{gamma_str}")
         if args.class_balance != "none":
             beta_str = str(args.class_balance_beta).replace(".", "p")
             variant_parts.append(f"cb_{args.class_balance}_b{beta_str}")
+        if args.kd_teacher_checkpoint is not None:
+            kd_alpha_str = str(args.kd_alpha).replace(".", "p")
+            kd_T_str = str(args.kd_temperature).replace(".", "p")
+            variant_parts.append(f"kd_a{kd_alpha_str}_T{kd_T_str}")
 
         if variant_parts:
             variant = "__".join(variant_parts)
@@ -890,8 +985,14 @@ def main():
         attention_heads=args.attention_heads,
         attention_dropout=args.attention_dropout,
         pt_k=args.pt_k,
+        flash_channels=tuple(args.flash_channels),
     ).to(device)
     logger.info("Используется модель: %s (%s)", args.model, args.task)
+
+    # Учитель для Knowledge Distillation (опционально)
+    teacher_model = None
+    if args.kd_teacher_checkpoint is not None:
+        teacher_model = load_teacher(args.kd_teacher_checkpoint, device)
     logger.info("Параметров: %s", f"{sum(p.numel() for p in model.parameters()):,}")
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -946,6 +1047,15 @@ def main():
                 args.k_small,
                 args.k_large,
             )
+        # Восстанавливаем flash_channels из чекпоинта, если не заданы явно
+        if "flash_channels" in checkpoint:
+            ckpt_flash = list(checkpoint["flash_channels"])
+            if ckpt_flash != args.flash_channels:
+                logger.warning(
+                    "flash_channels в чекпоинте %s != аргументу %s — используем из чекпоинта",
+                    ckpt_flash, args.flash_channels,
+                )
+                args.flash_channels = ckpt_flash
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         if "scheduler_state_dict" in checkpoint:
@@ -1007,6 +1117,10 @@ def main():
                 "persistent_workers": args.persistent_workers,
                 "early_stopping_patience": args.early_stopping_patience,
                 "early_stopping_min_delta": args.early_stopping_min_delta,
+                "flash_channels": str(args.flash_channels),
+                "kd_teacher_checkpoint": args.kd_teacher_checkpoint or "",
+                "kd_alpha": args.kd_alpha,
+                "kd_temperature": args.kd_temperature,
                 "run_name": run_name,
             }
         )
@@ -1037,6 +1151,9 @@ def main():
                 class_weights=class_weights,
                 loss_type=args.loss_type,
                 focal_gamma=args.focal_gamma,
+                teacher_model=teacher_model,
+                kd_alpha=args.kd_alpha,
+                kd_temperature=args.kd_temperature,
             )
             val_metrics = validate(
                 model,
@@ -1088,6 +1205,8 @@ def main():
                     mlflow.log_metric(f"val_iou_c{ci}", float(iou_c), step=epoch)
             mlflow.log_metric("epoch_time_sec", epoch_time_sec, step=epoch)
             mlflow.log_metric("peak_vram_mb", peak_vram_mb, step=epoch)
+            if "kd_loss" in train_metrics:
+                mlflow.log_metric("train_kd_loss", train_metrics["kd_loss"], step=epoch)
 
             epoch_row = {
                 "epoch": epoch + 1,
@@ -1139,10 +1258,14 @@ def main():
                     "attention_heads": args.attention_heads,
                     "attention_dropout": args.attention_dropout,
                     "pt_k": args.pt_k,
+                    "flash_channels": list(args.flash_channels),
                     "loss_type": args.loss_type,
                     "focal_gamma": args.focal_gamma,
                     "class_balance": args.class_balance,
                     "class_balance_beta": args.class_balance_beta,
+                    "kd_teacher_checkpoint": args.kd_teacher_checkpoint,
+                    "kd_alpha": args.kd_alpha,
+                    "kd_temperature": args.kd_temperature,
                     "lr_scheduler": args.lr_scheduler,
                     "class_to_idx": train_dataset.class_to_idx,
                     "idx_to_class": train_dataset.idx_to_class,
@@ -1176,16 +1299,26 @@ def main():
                 "attention_heads": args.attention_heads,
                 "attention_dropout": args.attention_dropout,
                 "pt_k": args.pt_k,
+                "flash_channels": list(args.flash_channels),
                 "loss_type": args.loss_type,
                 "focal_gamma": args.focal_gamma,
                 "class_balance": args.class_balance,
                 "class_balance_beta": args.class_balance_beta,
+                "kd_teacher_checkpoint": args.kd_teacher_checkpoint,
+                "kd_alpha": args.kd_alpha,
+                "kd_temperature": args.kd_temperature,
                 "class_to_idx": train_dataset.class_to_idx,
                 "idx_to_class": train_dataset.idx_to_class,
                 "normalize_stats": train_dataset.normalize_stats,
             }
             last_path = os.path.join(args.save_dir, "last_checkpoint.pth")
             torch.save(checkpoint, last_path)
+            # Записываем путь к last_checkpoint в .ckpt-файл рядом с metrics_json.
+            # run_sweep.py читает его при рестарте и автоматически передаёт --resume.
+            if args.metrics_json_path:
+                _state_file = Path(args.metrics_json_path).with_suffix('.ckpt')
+                _state_file.parent.mkdir(parents=True, exist_ok=True)
+                _state_file.write_text(os.path.abspath(last_path), encoding='utf-8')
 
             if args.early_stopping_patience > 0 and epochs_without_improvement >= args.early_stopping_patience:
                 logger.info(
@@ -1261,6 +1394,10 @@ def main():
             with metrics_path.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
             logger.info("Метрики сохранены: %s", metrics_path)
+            # Удаляем .ckpt-указатель: обучение завершено, возобновление не нужно.
+            _state_file = metrics_path.with_suffix('.ckpt')
+            if _state_file.exists():
+                _state_file.unlink()
 
         mlflow.log_metric("best_val_metric", best_val_metric)
         if best_val_per_class_iou:

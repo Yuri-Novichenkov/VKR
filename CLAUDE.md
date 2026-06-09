@@ -35,6 +35,11 @@ python scripts/train.py --model ldgcnn_flash --task segmentation --dataset Mar16
   --num_points 4096 --batch_size 4 --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
   --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
 
+# LDGCNN with attention variant (attention_type: none | gatv2 | local_window)
+python scripts/train.py --model ldgcnn --attention_type gatv2 \
+  --attention_k 16 --attention_heads 4 --attention_dropout 0.1 \
+  --loss_type ce --class_balance effective --class_balance_beta 0.9999 ...
+
 # Test (GroundTruth file has labels)
 python scripts/test.py --checkpoint <path> \
   --dataset Mar16 --num_points 4096 --batch_size 8 --device cuda
@@ -57,8 +62,26 @@ python scripts/benchmark_inference.py --all_mar16 \
   --modes fp32 fp16 compile_fp32 compile_fp16 --batch_size 1 \
   --output_csv results/benchmark_gpu.csv
 
-# k-neighbor sensitivity analysis (speed vs. accuracy tradeoff across models)
-python scripts/k_sensitivity.py
+# N-point sensitivity analysis (speed + mIoU for N=512–4096, GPU or CPU)
+python scripts/n_sensitivity.py  # outputs results/n_sensitivity_{device}.xlsx
+
+# k-neighbor sensitivity analysis (speed + mIoU vs k, GPU only)
+python scripts/k_sensitivity.py  # outputs results/k_sensitivity.xlsx
+
+# Generate main VKR report (7-sheet Excel with all metrics, charts, color coding)
+python scripts/make_vkr_tables.py  # outputs results/vkr_tables.xlsx
+
+# Knowledge Distillation sweep (3 runs: Small baseline, Full+KD, Small+KD)
+python scripts/run_sweep.py --config configs/sweeps/kd_ldgcnn_flash_small.yaml
+python scripts/run_sweep.py --config configs/sweeps/kd_ldgcnn_flash_small.yaml --resume --only_model "LDGCNNFlashSmall+KD"
+
+# Обучение вручную: LDGCNNFlash-Small с KD от PointTransformer
+python scripts/train.py --model ldgcnn_flash --flash_channels 32 64 128 \
+  --task segmentation --dataset Mar16 --num_points 4096 --batch_size 16 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp --seed 42 \
+  --loss_type ce --class_balance effective --class_balance_beta 0.99999 \
+  --kd_teacher_checkpoint checkpoints/loss_sweep/pointtransformer/segmentation/loss_lovasz_g2p0__cb_effective_b0p99999/mar16/best_model.pth \
+  --kd_alpha 0.5 --kd_temperature 4.0
 
 # Sweep (comparison across models/datasets)
 python scripts/run_sweep.py --config configs/sweeps/loss_sweep_all_models.yaml
@@ -67,16 +90,20 @@ python scripts/run_sweep.py --config configs/sweeps/comparison_mar18.yaml --resu
 
 ### Architecture Overview
 
-**6 models**, all in `src/models/`, instantiated via `build_model()` in `src/models/factory.py`:
+**8 model variants**, all in `src/models/`, instantiated via `build_model()` in `src/models/factory.py`:
 
-| model_type | Class | Notes |
-|---|---|---|
-| `pointnet` | `PointNetSegmentation` | TNet + shared MLP |
-| `pointnet++` | `PointNetPlusPlusSegmentation` | FPS + Set Abstraction + FP; **no AMP** (NaN in square_distance) |
-| `dgcnn` | `DGCNNSegmentation` | Dynamic graph EdgeConv, kNN in feature space |
-| `ldgcnn` | `LDGCNNSegmentation` | EdgeConv in XYZ-space + optional GATv2/local_window attention |
-| `pointtransformer` | `PointTransformerSegmentation` | U-Net, vector self-attention; huge compile speedup (11.8×) |
-| `ldgcnn_flash` | `LDGCNNFlashSegmentation` | Custom (ВКР): LDGCNN + Flash Self-Attention (SDPA) |
+| model_type | Variant / Class | Mar16 mIoU | Notes |
+|---|---|---|---|
+| `pointnet` | `PointNetSegmentation` | 42.47% | TNet + shared MLP |
+| `pointnet++` | `PointNetPlusPlusSegmentation` | 49.15% | FPS + Set Abstraction + FP; **no AMP** |
+| `dgcnn` | `DGCNNSegmentation` | 53.13% | Dynamic graph EdgeConv, kNN in feature space |
+| `ldgcnn` | `LDGCNNSegmentation` (none) | 54.76% | EdgeConv in XYZ-space, no attention |
+| `ldgcnn` | `LDGCNNSegmentation` (local_window) | 55.05% | + local window attention |
+| `ldgcnn` | `LDGCNNSegmentation` (gatv2) | 55.44% | + GATv2 attention ← best graph model |
+| `ldgcnn_flash` | `LDGCNNFlashSegmentation` | 60.88% | LDGCNN + Flash Self-Attention (SDPA) |
+| `pointtransformer` | `PointTransformerSegmentation` | 61.65% | U-Net, vector self-attention ← best overall |
+
+LDGCNN attention variant is set via `--attention_type {none,gatv2,local_window}` at train time (stored in checkpoint; `build_model()` reads it automatically).
 
 All models share the same `get_loss(predictions, targets, class_weights)` interface.
 `build_model()` is the single source of truth — all scripts use it to prevent train/test divergence.
@@ -102,8 +129,39 @@ All models share the same `get_loss(predictions, targets, class_weights)` interf
 - `--only_model "<display_name>"`: runs only one model (for 24-hour server limit)
 - Matrix mode writes to `output_root:` from YAML (comparison sweeps → `experiments/comparison/`)
 
-**Best hyperparameters** per model are in `configs/best_params.yaml`. Rankings on Mar16 (mIoU):
-LDGCNN-GATv2 (0.5544) > LDGCNN-LocalWindow (0.5505) > LDGCNN (0.5476) > DGCNN (0.5313) > PointNet++ (0.4915) > PointNet (0.4247)
+### Knowledge Distillation (финал ВКР)
+
+Учитель: PointTransformer (61.65% mIoU). Студент: LDGCNNFlash-Small (каналы 32/64/128 вместо 64/128/256).
+
+**Новые аргументы `train.py`:**
+- `--flash_channels C1 C2 C3` — каналы для LDGCNNFlash (default `64 128 256`; small: `32 64 128`)
+- `--kd_teacher_checkpoint PATH` — чекпоинт учителя (любая модель из `build_model`)
+- `--kd_alpha FLOAT` — вес KD loss (0 = только task, 1 = только KD; default `0.5`)
+- `--kd_temperature FLOAT` — температура softmax (default `4.0`)
+
+**Loss formula:** `L = (1-α) · L_task + α · T² · KL(student/T ‖ teacher/T)`
+
+Учитель загружается через `load_teacher()` (замораживается `requires_grad=False`), инференс — в FP32 с `torch.no_grad()` до autocast-блока студента.
+
+Три run-а в `configs/sweeps/kd_ldgcnn_flash_small.yaml`:
+1. `LDGCNNFlashSmall_baseline` — Small без KD (нижняя граница)
+2. `LDGCNNFlash_full_kd` — Full + KD (проверка прироста от учителя)
+3. `LDGCNNFlashSmall_kd` — Small + KD (ключевой результат)
+
+`run_sweep.py` теперь поддерживает режим `runs:` в YAML (список независимых запусков с произвольными params, включая list-аргументы типа `flash_channels`).
+
+### Report Generation
+
+`scripts/make_vkr_tables.py` produces `results/vkr_tables.xlsx` — the primary deliverable. It contains 7 sheets:
+1. **Сравнение моделей** — 8 models × 14 metrics (params, GMACs, mIoU, training time, GPU/CPU bench)
+2. **GPU-оптимизация** — all 4 precision modes (fp32/fp16/compile variants) with timing and VRAM
+3. **N-sensitivity** — speed + mIoU for N=512,1024,2048,3072,4096 on CPU and GPU
+4. **k-sensitivity** — speed + mIoU vs k for graph models (DGCNN, LDGCNN, LDGCNNFlash, PointTransformer)
+5. **INT8 квантизация** — dynamic quantization speedup per model
+6. **Оптимальный N** — speed/accuracy tradeoff recommendations
+7. **Методы оптимизации** — summary of 8 optimization techniques
+
+The data in this script is **hardcoded** from final experiment runs. To update it, edit the dictionaries at the top of `make_vkr_tables.py` and re-run.
 
 ### Critical AMP / FP16 Bugs (already fixed, do not revert)
 
@@ -126,18 +184,23 @@ LDGCNN-GATv2 (0.5544) > LDGCNN-LocalWindow (0.5505) > LDGCNN (0.5476) > DGCNN (0
 
 - **torch_cluster (fast_knn)**: Для плотных батчей N=4096 torch_cluster оказывается ~14× медленнее matmul-based kNN, потому что cuBLAS GEMM эффективнее разреженного алгоритма. fast_knn=False — дефолт; fast_knn=True нужен только для экспериментов.
 
+- **PointTransformer при N < 2048**: mIoU резко падает из-за иерархического FPS — каждый уровень вдвое уменьшает число точек; при малых N нижние уровни вырождаются.
+
+- **PointNet++ ONNX export**: Завершается с ошибкой из-за динамических форм в `index_put_`. Для остальных моделей использовать opset 18.
+
+- **Dynamic INT8 quantization**: Не даёт ускорения для graph-based моделей (узкое место — matmul в pairwise_distance, а не Conv2d).
+
 ### Inference Optimization Results (Mar16, GPU RTX A5000, batch=1)
 
 Best mode per model:
 - **PointNet**: `compile_fp16` → 1.38 ms (1.8× vs fp32)
 - **DGCNN**: `compile_fp16` → 3.7 ms (3.9×)
 - **LDGCNN**: `compile_fp16` → 17.1 ms (2.2×)
-- **PointTransformer**: `compile_fp32` → 12.8 ms (**11.8×** — inductor unrolls attention loop)
 - **LDGCNNFlash**: `compile_fp16` → 5.9 ms (2.5×)
+- **PointTransformer**: `compile_fp32` → 12.8 ms (**11.8×** — inductor unrolls attention loop)
 - **PointNet++**: no mode helps (~178 ms, FPS is sequential CPU-bound)
 
 CPU: only PointNet practical (74 ms fp32, 56 ms ONNX). Graph-based models are O(N²) on CPU.
-PointNet++ ONNX export fails (dynamic shapes in `index_put_`). Use opset 18 for others.
 
 ### Class Legend
 

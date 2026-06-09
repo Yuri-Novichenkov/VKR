@@ -1,775 +1,391 @@
-# PointNet для семантической сегментации 3D-точечных облаков
+# Семантическая сегментация 3D-облаков точек LiDAR
 
-Реализация модели PointNet для семантической сегментации 3D-точечных облаков местности на основе данных LiDAR.
+**Тема ВКР:** Исследование и разработка нейросетевой модели для семантической сегментации 3D-облаков точек местности на примере датасета Hessigheim 3D Benchmark (H3D).
 
-**Тема ВКР:** Исследование и разработка нейросетевой модели для семантической сегментации 3D-точечных облаков местности на примере Hessigheim 3D Benchmark Dataset.
+---
 
-## Структура проекта
+## Содержание
 
-```
-.
-├── src/
-│   ├── models/              # Модели (PointNet, PointNet++, DGCNN, LDGCNN)
-│   ├── data/                # Загрузчики данных
-│   └── utils/               # Общие операции (kNN, EdgeConv)
-├── scripts/                 # Скрипты (train/test/visualize и др.)
-├── notebooks/               # Jupyter notebooks
-├── Files/                   # Данные (Mar16, Mar18)
-├── requirements.txt         # Зависимости проекта
-└── README.md               
-```
+1. [Установка](#установка)
+2. [Данные](#данные)
+3. [Архитектуры моделей](#архитектуры-моделей)
+4. [Обучение](#обучение)
+5. [Тест и предсказания](#тест-и-предсказания)
+6. [Визуализация](#визуализация)
+7. [Дистилляция знаний (финал ВКР)](#дистилляция-знаний-финал-вкр)
+8. [Оптимизация инференса](#оптимизация-инференса)
+9. [Система экспериментов](#система-экспериментов)
+10. [Результаты](#результаты)
+11. [Литература](#литература)
+12. [Автор](#автор)
+
+---
 
 ## Установка
-1. 
+
 ```bash
+# 1. Зависимости проекта
 pip install -r requirements.txt
-```
 
-### Установка PyTorch на GPU-сервере
+# 2. Инструменты анализа (профилировщики, ONNX, torch_cluster)
+pip install -r requirements-dev.txt
 
-`torch` не зафиксирован в `requirements.txt`, потому что способ установки зависит от ОС, драйвера и CUDA-окружения сервера.
-
-Для Linux/GPU сначала установите обычные зависимости:
-
-```bash
-pip install -r requirements.txt
-```
-
-Затем отдельно установите PyTorch по официальной инструкции для вашей конфигурации CUDA:
-
-```bash
+# 3. PyTorch устанавливается отдельно под вашу версию CUDA
+#    https://pytorch.org/get-started/locally/
+# Пример для CUDA 12.8 (A5000):
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
 
-Если используется готовый GPU-образ Selectel, перед установкой PyTorch рекомендуется проверить:
-
+Проверка GPU-сервера перед установкой:
 ```bash
 nvidia-smi
-python -c "import torch; print(torch.cuda.is_available())"
-```
-### Обучение модели
-С рекомендуемыми параметрами
-**PointNet (сегментация):**
-```bash
-python scripts/train.py --model pointnet --task segmentation --dataset Mar16 --amp --num_points 4096 --batch_size 8 --lr 0.001 --epochs 80 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
-```
-```bash
-python scripts/train.py --model pointnet --task segmentation --dataset Mar16 --num_points 4096 --batch_size 8 --lr 0.001 --epochs 100 --lambda_reg 0.001 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
-```
-```bash
-python scripts/test.py --checkpoint checkpoints/pointnet/segmentation/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
-```
-```bash
-python scripts/predictions.py --checkpoint checkpoints/pointnet/segmentation/mar16/best_model.pth --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
-```
-**PointNet++ (сегментация):**
-```bash
-python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --num_points 4096 --batch_size 4 --lr 0.001 --epochs 100 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
-```
-```bash
-python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --num_points 4096 --batch_size 4 --lr 0.0005 --epochs 120 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
-```
-```bash
-python scripts/test.py --checkpoint checkpoints/pointnet++/segmentation/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
+python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
 ```
 
-**DGCNN (сегментация):**
-```bash
-python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 --amp --k 8 --num_points 2048 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --batch_size 2
-```
-```bash
-python scripts/test.py --checkpoint checkpoints/dgcnn/segmentation/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
-```
-
-**LDGCNN (сегментация):**
-```bash
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --amp --num_points 2048 --batch_size 2 --k_small 8 --k_large 16 --lr 0.001 --epochs 80 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
-```
-```bash
-python scripts/test.py --checkpoint checkpoints/ldgcnn/segmentation/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 4096 --batch_size 4 --device cuda
-```
-
-### Обучение с class_balance (100 эпох, сегментация)
-Рекомендуемый режим балансировки: `--class_balance effective --class_balance_beta 0.999`.
-
-**PointNet + class_balance**
-```bash
-python scripts/train.py --model pointnet --task segmentation --dataset Mar16 --num_points 4096 --batch_size 8 --lr 0.001 --epochs 100 --lambda_reg 0.001 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
-```
-
-**PointNet++ + class_balance**
-```bash
-python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 --num_points 4096 --batch_size 4 --lr 0.0005 --epochs 100 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
-```
-
-**DGCNN + class_balance**
-```bash
-python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --k 16 --lr 0.001 --epochs 100 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
-```
-
-**LDGCNN + class_balance**
-```bash
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --k_small 12 --k_large 24 --lr 0.0008 --epochs 100 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
-```
-
-### Attention эксперименты для LDGCNN (E1/E2/E3)
-Ниже готовые команды для запуска с балансировкой классов (`class_balance`).
-Чекпоинты для разных режимов (`attention`, `loss_type`, `class_balance`) теперь автоматически сохраняются в отдельные подпапки внутри `checkpoints/<model>/<task>/...`.
-
-**E1: LDGCNN + GATv2-style attention + class_balance**
-```bash
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type gatv2 --attention_k 16 --attention_heads 4 --attention_dropout 0.1 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
-```
-
-**E2: LDGCNN + Local Window attention + class_balance**
-```bash
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type local_window --attention_k 8 --attention_heads 4 --attention_dropout 0.1 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
-```
-
-**E3: LDGCNN контрольный запуск (без attention) + class_balance**
-```bash
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type none --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
-```
-
-**Опционально для E1/E2/E3: CB-Focal loss**
-```bash
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --num_points 2048 --batch_size 4 --lr 0.0008 --epochs 100 --k_small 12 --k_large 24 --attention_type gatv2 --attention_k 16 --attention_heads 4 --attention_dropout 0.1 --loss_type cb_focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.999 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512 --seed 42
-```
-
-**Тест для attention-экспериментов:**
-```bash
-python scripts/test.py --checkpoint checkpoints/ldgcnn/segmentation/attn_gatv2_k16_h4_d0p1/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 2048 --batch_size 4 --device cuda
-```
-```bash
-python scripts/test.py --checkpoint checkpoints/ldgcnn/segmentation/attn_local_window_k8_h4_d0p1/mar16/best_model.pth --test_data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz --num_points 2048 --batch_size 4 --device cuda
-```
-
-### Классификация облаков (все модели)
-Для задачи `classification` доступны `pointnet`, `pointnet++`, `dgcnn`, `ldgcnn`.
-
-**PointNet (классификация):**
-```bash
-python scripts/train.py --model pointnet --task classification --dataset Mar16 --num_points 4096 --batch_size 8 --lr 0.001 --epochs 80 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
-```
-
-**PointNet++ (классификация):**
-```bash
-python scripts/train.py --model pointnet++ --task classification --dataset Mar16 --num_points 4096 --batch_size 8 --lr 0.001 --epochs 100 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
-```
-
-**DGCNN (классификация):**
-```bash
-python scripts/train.py --model dgcnn --task classification --dataset Mar16 --num_points 2048 --batch_size 8 --lr 0.001 --epochs 100 --k 8 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
-```
-
-**LDGCNN (классификация):**
-```bash
-python scripts/train.py --model ldgcnn --task classification --dataset Mar16 --num_points 2048 --batch_size 8 --lr 0.001 --epochs 100 --k_small 8 --k_large 16 --cache_dir cache --cache_mode read --cache_chunked --chunk_size 512
-```
-
-**Для генерации кэша:**
-```bash
-python scripts/train.py --dataset Mar16 --num_points 4096 --cache_dir cache --cache_mode write --cache_chunked --chunk_size 512 --cache_only
-```
-**Для генерации предсказаний (на ноутбуке, CPU):**
-
-Примерное время на Mar16 (1239 облаков): PointNet ~1.5 мин, PointNet++ ~6 мин,
-DGCNN/LDGCNNFlash/PointTransformer ~10 мин, LDGCNN ~28 мин.
-
-```powershell
-# PointNet
-python scripts/predictions.py `
-    --checkpoint "checkpoints/loss_sweep/pointnet/segmentation/cb_effective_b0p99999/mar16/best_model.pth" `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --output_root predictions --device cpu
-```
-
-```powershell
-# PointNet++
-python scripts/predictions.py `
-    --checkpoint "checkpoints/loss_sweep/pointnet++/segmentation/loss_lovasz_g2p0__cb_effective_b0p99999/mar16/best_model.pth" `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --output_root predictions --device cpu
-```
-
-```powershell
-# DGCNN
-python scripts/predictions.py `
-    --checkpoint "checkpoints/loss_sweep/dgcnn/segmentation/loss_lovasz_g2p0__cb_effective_b0p99999/mar16/best_model.pth" `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --output_root predictions --device cpu
-```
-
-```powershell
-# LDGCNN (GATv2)
-python scripts/predictions.py `
-    --checkpoint "checkpoints/loss_sweep/ldgcnn/segmentation/attn_gatv2_k16_h4_d0p1__cb_effective_b0p99999/mar16/best_model.pth" `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --output_root predictions --device cpu
-```
-
-```powershell
-# PointTransformer
-python scripts/predictions.py `
-    --checkpoint "checkpoints/loss_sweep/pointtransformer/segmentation/cb_effective_b0p99999/mar16/best_model.pth" `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --output_root predictions --device cpu
-```
-
-```powershell
-# LDGCNNFlash
-python scripts/predictions.py `
-    --checkpoint "checkpoints/loss_sweep/ldgcnn_flash/segmentation/loss_lovasz_g2p0__cb_effective_b0p99999/mar16/best_model.pth" `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --output_root predictions --device cpu
-```
-
-**Для визуализации файлов:**
-
-Легенда классов задаётся через `--class_config configs/classes/hessigheim.yaml`.
-Флаг `--legend` сохраняет `figures/legend.png` (накладывается поверх скриншота).
-`--max_points` — число точек для отображения (300000 хватает для скриншота).
-
-```powershell
-# Ground Truth — Mar16
-python scripts/visualization.py `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --color_by gt --num_classes 11 `
-    --class_config configs/classes/hessigheim.yaml `
-    --legend --max_points 300000
-```
-
-```powershell
-# PointNet — предсказание Mar16
-python scripts/visualization.py `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --predictions "predictions/pointnet/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
-    --color_by pred --num_classes 11 `
-    --class_config configs/classes/hessigheim.yaml `
-    --legend --max_points 300000
-```
-
-```powershell
-# PointNet++ — предсказание Mar16
-python scripts/visualization.py `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --predictions "predictions/pointnet++/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
-    --color_by pred --num_classes 11 `
-    --class_config configs/classes/hessigheim.yaml `
-    --legend --max_points 300000
-```
-
-```powershell
-# DGCNN — предсказание Mar16
-python scripts/visualization.py `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --predictions "predictions/dgcnn/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
-    --color_by pred --num_classes 11 `
-    --class_config configs/classes/hessigheim.yaml `
-    --legend --max_points 300000
-```
-
-```powershell
-# LDGCNN — предсказание Mar16
-python scripts/visualization.py `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --predictions "predictions/ldgcnn/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
-    --color_by pred --num_classes 11 `
-    --class_config configs/classes/hessigheim.yaml `
-    --legend --max_points 300000
-```
-
-```powershell
-# PointTransformer — предсказание Mar16
-python scripts/visualization.py `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --predictions "predictions/pointtransformer/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
-    --color_by pred --num_classes 11 `
-    --class_config configs/classes/hessigheim.yaml `
-    --legend --max_points 300000
-```
-
-```powershell
-# LDGCNNFlash — предсказание Mar16
-python scripts/visualization.py `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --predictions "predictions/ldgcnn_flash/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt" `
-    --color_by pred --num_classes 11 `
-    --class_config configs/classes/hessigheim.yaml `
-    --legend --max_points 300000
-```
-
-```powershell
-# RGB-окраска (без классов)
-python scripts/visualization.py `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --color_by rgb --max_points 300000
-```
-
-```powershell
-# Только легенда (без Open3D) — сохранить figures/legend.png
-python scripts/visualization.py `
-    --data "Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz" `
-    --color_by gt --num_classes 11 `
-    --class_config configs/classes/hessigheim.yaml `
-    --legend --max_points 1
-```
-
-### Параметры обучения
-
-- `--train_data`: путь к обучающему набору данных (опционально)
-- `--val_data`: путь к валидационному набору данных (опционально)
-- `--data_root`: корень данных, например `Files/Mar18/LiDAR`
-- `--dataset`: префикс датасета (`Mar16` или `Mar18`)
-- `--num_points`: количество точек в облаке (по умолчанию: 4096)
-- `--batch_size`: размер батча (по умолчанию: 8)
-- `--epochs`: количество эпох (по умолчанию: 100)
-- `--lr`: скорость обучения (по умолчанию: 0.001)
-- `--lambda_reg`: коэффициент регуляризации трансформаций (по умолчанию: 0.001)
-- `--save_dir`: директория для сохранения моделей (по умолчанию: `checkpoints`)
-- `--resume`: путь к чекпоинту для возобновления обучения (опционально)
-- `--model`: модель (`pointnet`, `pointnet++`, `dgcnn`, `ldgcnn`)
-- `--task`: задача (`segmentation` или `classification`)
-- `--experiment_name`: имя эксперимента в MLflow (по умолчанию `PointCloudExperiments`)
-- `--run_name`: имя запуска в MLflow (опционально; если не задано, формируется автоматически)
-- `--attention_type`: attention-режим для `ldgcnn` (`none`, `gatv2`, `local_window`)
-- `--attention_k`: размер локального окна attention
-- `--attention_heads`: число attention-heads
-- `--attention_dropout`: dropout attention
-- `--loss_type`: тип loss (`ce`, `focal`, `cb_focal`)
-- `--focal_gamma`: gamma для focal loss (по умолчанию `2.0`)
-- `--class_balance`: балансировка классов в `CrossEntropy` (`none`, `inverse`, `effective`)
-- `--class_balance_beta`: параметр beta для `effective` режима (по умолчанию `0.999`)
-
-## Формат данных
-- `X`, `Y`, `Z`: координаты точек
-- `R`, `G`, `B`: цвет точек
-- `Intensity`: интенсивность
-- `NumberOfReturns`, `ReturnNumber`: информация о возвратах лидара
-- `Classification`: метка класса для каждой точки
-
-## Данные
-
-Данные лежат в `Files/`:
-- `Files/Mar16/LiDAR/Mar16_train.txt`
-- `Files/Mar16/LiDAR/Mar16_val.txt`
-- `Files/Mar16/LiDAR/Mar16_test.txt`
-- `Files/Mar18/LiDAR/Mar18_train.txt`
-- `Files/Mar18/LiDAR/Mar18_val.txt`
-- `Files/Mar18/LiDAR/Mar18_test.txt`
-
-
-## Возобновление обучения
-```bash
-python scripts/train.py --resume checkpoints/last_checkpoint.pth
-```
-
-## MLflow
-
-Логи экспериментов пишутся локально в `mlruns/`.
-Пример запуска:
+**MLflow UI:**
 ```bash
 mlflow ui --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns
 ```
 
-### Рекомендуемая схема именования экспериментов
+---
 
-Чтобы в MLflow было проще анализировать результаты ВКР, рекомендуется делить запуски на смысловые серии:
+## Данные
 
-- `VKR_Baselines` — базовые модели (`pointnet`, `pointnet++`, `dgcnn`, `ldgcnn`)
-- `VKR_ClassBalance` — эксперименты с `--class_balance`
-- `VKR_LDGCNN_Attention` — attention-эксперименты `E1/E2/E3`
-- `VKR_Final` — финальные ("парадные") запуски для отчета
-- `VKR_Ablation` — абляции (например `no-attention`, `no-class-balance`, `k12-24`)
+**Датасет:** Hessigheim 3D (H3D) — UAV LiDAR, 11 классов, ~1.4M точек на сплит.
 
-### Формат `run_name`
+| Файлы | Путь |
+|-------|------|
+| Mar16 (основной) | `Files/Mar16/LiDAR/` |
+| Mar18 (кросс-датасет) | `Files/Mar18/LiDAR/` |
+| Mar19 (кросс-датасет) | `Files/Mar19/LiDAR/` |
 
-Для обучения (`scripts/train.py`) рекомендуется формат:
+Формат файлов: `.laz` (приоритет) → `.las` → `.txt`. Тестовый файл с метками: `Mar16_test_GroundTruth.laz`.
 
-`<model>__<task>__<dataset>__<variant>__pts<num_points>__bs<batch_size>__seed<seed>`
+**Входные признаки на точку (9 каналов):** X, Y, Z, R, G, B, Intensity, NumberOfReturns, ReturnNumber.
 
-Примеры:
+**11 классов Hessigheim:**
+`0=Low Vegetation, 1=Impervious Surface, 2=Vehicle, 3=Urban Furniture, 4=Roof, 5=Facade, 6=Shrub, 7=Tree, 8=Soil/Gravel, 9=Vertical Surface, 10=Chimney`
 
-- `pointnet__segmentation__mar16__baseline__pts4096__bs8__seed42`
-- `pointnet++__segmentation__mar16__cb-effective__pts4096__bs4__seed42`
-- `ldgcnn__segmentation__mar16__attn-gatv2__pts2048__bs4__seed42`
-- `ldgcnn__segmentation__mar16__attn-local-window__cb-effective__pts2048__bs4__seed42`
+---
 
-Для теста (`scripts/test.py`) рекомендуется формат:
+## Архитектуры моделей
 
-`<model>__<task>__test__<dataset>__<variant>__<checkpoint>`
+Все модели реализованы в `src/models/`, создаются через `build_model()` в `src/models/factory.py`.
 
-Примеры:
+| Модель | Класс | Mar16 mIoU | Параметры |
+|--------|-------|-----------|-----------|
+| `pointnet` | `PointNetSegmentation` | 42.47% | TNet + shared MLP |
+| `pointnet++` | `PointNetPlusPlusSegmentation` | 49.15% | FPS + Set Abstraction + FP |
+| `dgcnn` | `DGCNNSegmentation` | 53.13% | Dynamic graph EdgeConv (feature space) |
+| `ldgcnn` (none) | `LDGCNNSegmentation` | 54.76% | EdgeConv в XYZ-пространстве |
+| `ldgcnn` (local_window) | `LDGCNNSegmentation` | 55.05% | + local window attention |
+| `ldgcnn` (gatv2) | `LDGCNNSegmentation` | 55.44% | + GATv2 attention |
+| `ldgcnn_flash` (Full) | `LDGCNNFlashSegmentation` | 60.88% | LDGCNN + Flash Self-Attention (SDPA) |
+| `ldgcnn_flash` (Small) | `LDGCNNFlashSegmentation` | ~ожидается | Каналы 32/64/128, 266K парам. |
+| `pointtransformer` | `PointTransformerSegmentation` | **61.65%** | U-Net + vector self-attention |
 
-- `pointnet__segmentation__test__mar16__baseline__best_model`
-- `ldgcnn__segmentation__test__mar16__attn-gatv2__best_model`
+**LDGCNNFlash** — авторская модель ВКР. Сочетает локальный граф EdgeConv из LDGCNN с глобальным контекстом через Flash Self-Attention (SDPA, PyTorch ≥ 2.0). Flash Attention использует tile-based вычисление: O(N·d) памяти без материализации матрицы N×N, ~3–4× быстрее наивного attention при FP16.
 
-### Варианты `variant`
+---
 
-- `baseline` — базовый запуск без дополнительных методов
-- `cb-effective`, `cb-inverse` — балансировка классов
-- `attn-gatv2`, `attn-local-window` — attention-конфигурации
-- `focal`, `cb-focal` — варианты функции потерь
-- `no-attention`, `no-class-balance`, `k12-24` — абляции
+## Обучение
 
-Пример команды:
+### Финальные команды (лучшие гиперпараметры из `configs/best_params.yaml`)
 
+**LDGCNNFlash (Full) — лучший конфиг:**
 ```bash
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 --experiment_name VKR_LDGCNN_Attention --run_name "ldgcnn__segmentation__mar16__attn-gatv2__cb-effective__pts2048__bs4__seed42" --num_points 2048 --batch_size 4 --k_small 12 --k_large 24 --attention_type gatv2 --attention_k 16 --attention_heads 4 --attention_dropout 0.1 --class_balance effective --class_balance_beta 0.999 --seed 42
+python scripts/train.py --model ldgcnn_flash --task segmentation --dataset Mar16 \
+  --num_points 4096 --batch_size 16 --epochs 100 --lr 0.001 --lr_scheduler cosine \
+  --amp --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42 \
+  --cache_mode read --cache_chunked --chunk_size 512 --num_workers 4
 ```
 
-## Схемы архитектур (torchviz + hiddenlayer)
-
-Для генерации схем добавлен скрипт `scripts/visualize_models.py`.
-
-Установка зависимостей:
+**PointTransformer:**
 ```bash
-py -3 -m pip install torchviz hiddenlayer matplotlib graphviz
+python scripts/train.py --model pointtransformer --task segmentation --dataset Mar16 \
+  --num_points 4096 --batch_size 16 --epochs 100 --lr 0.001 --lr_scheduler cosine \
+  --amp --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42 \
+  --cache_mode read --cache_chunked --chunk_size 512 --num_workers 4
 ```
 
-Запуск (все модели, сегментация):
+**LDGCNN + GATv2 (лучшая graph-модель):**
 ```bash
-py -3 scripts/visualize_models.py --models all --task segmentation --num_points 1024 --num_features 9 --num_classes 8 --output_dir diagrams
+python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
+  --num_points 4096 --batch_size 16 --epochs 100 --lr 0.001 --lr_scheduler cosine \
+  --amp --loss_type ce --class_balance effective --class_balance_beta 0.9999 --seed 42 \
+  --attention_type gatv2 --attention_k 16 --attention_heads 4 --attention_dropout 0.1 \
+  --cache_mode read --cache_chunked --chunk_size 512 --num_workers 4
 ```
 
-Запуск (одна модель, классификация):
+**PointNet++ (AMP отключён — NaN при FP16):**
 ```bash
-py -3 scripts/visualize_models.py --models ldgcnn --task classification --num_points 1024 --num_features 9 --num_classes 8 --output_dir diagrams --attention_type gatv2
+python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
+  --num_points 4096 --batch_size 16 --epochs 100 --lr 0.0003 --lr_scheduler cosine \
+  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42 \
+  --cache_mode read --cache_chunked --chunk_size 512 --num_workers 4
 ```
 
-Примечание: для PNG/SVG нужен установленный системный Graphviz (`dot` в `PATH`).
-Если `dot` не найден, скрипт все равно сохранит `.dot` файлы в `diagrams/`.
-
-## Sweep batch-size (YAML) + сравнительные графики
-
-Для автоматического сравнения нескольких `batch_size` добавлены скрипты:
-
-- `scripts/run_sweep.py` — запускает серию прогонов `train.py` по YAML-конфигу.
-- `scripts/plot_sweep_results.py` — строит графики из `runs_summary.csv`.
-
-Папки результатов создаются с timestamp и не перезаписываются:
-
-`experiments/batch_size/<timestamp>_<experiment>_<model>_<dataset>_<run_group>/`
-
-Внутри каждой sweep-папки:
-
-- `config_resolved.yaml` — сохранённый конфиг запуска
-- `runs_summary.csv` — сводная таблица по всем `batch_size`
-- `logs/` — логи каждого запуска
-- `metrics/` — JSON-метрики каждого запуска
-- `plots/` — сравнительные графики
-
-### Пример YAML-конфига
-
-Готовый пример:
-
-`configs/sweeps/ldgcnn_gatv2_batch_sweep.yaml`
-
-Также добавлены готовые конфиги:
-
-- `configs/sweeps/pointnet_batch_sweep.yaml`
-- `configs/sweeps/pointnetpp_batch_sweep.yaml`
-- `configs/sweeps/dgcnn_batch_sweep.yaml`
-- `configs/sweeps/ldgcnn_gatv2_batch_sweep.yaml`
-- `configs/sweeps/ldgcnn_localwin_batch_sweep.yaml`
-- `configs/sweeps/ldgcnn_none_batch_sweep.yaml`
-
-### Запуск sweep
-
+### Подготовка кэша (разовая операция, ускоряет обучение)
 ```bash
-python scripts/run_sweep.py --config configs/sweeps/ldgcnn_gatv2_batch_sweep.yaml --output_root experiments/batch_size
+python scripts/train.py --dataset Mar16 --num_points 4096 \
+  --cache_dir cache --cache_mode write --cache_chunked --chunk_size 512 --cache_only
 ```
 
-По умолчанию `run_sweep.py` после завершения автоматически строит графики в `plots/`.
-Отключить можно флагом `--no_auto_plot`.
+---
 
-Если нужно явно указать интерпретатор для дочерних запусков:
-
-```bash
-python scripts/run_sweep.py --config configs/sweeps/ldgcnn_gatv2_batch_sweep.yaml --python_executable .venv/bin/python
-```
-
-### Построение графиков
+## Тест и предсказания
 
 ```bash
-python scripts/plot_sweep_results.py --summary_csv experiments/batch_size/<your_sweep_folder>/runs_summary.csv
+# Тест с scene-level voting (финальные метрики)
+python scripts/test.py \
+  --checkpoint checkpoints/loss_sweep/ldgcnn_flash/segmentation/cb_effective_b0p99999/mar16/best_model.pth \
+  --dataset Mar16 --num_points 4096 --batch_size 8 --device cuda
+
+# Предсказания на CPU-ноутбуке (~1–30 мин в зависимости от модели)
+python scripts/predictions.py \
+  --checkpoint checkpoints/loss_sweep/ldgcnn_flash/segmentation/cb_effective_b0p99999/mar16/best_model.pth \
+  --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz \
+  --output_root predictions --device cpu
 ```
 
-### Что логируется для сравнения
+Примерное время предсказаний на CPU (Mar16, 1239 облаков, N=4096):
+PointNet ~1.5 мин, PointNet++ ~6 мин, LDGCNNFlash ~10 мин, LDGCNN ~28 мин.
 
-- `best_val_metric`
-- `final_val_miou` / `final_val_accuracy`
-- `mean_epoch_time_sec`
-- `total_train_time_sec`
-- `max_peak_vram_mb`
-- `samples_per_sec` и `points_per_sec` (вычисляются из числа объектов/точек за эпоху)
+---
 
-VRAM берётся из PyTorch (`torch.cuda.max_memory_allocated`) и пишется по эпохам в MLflow/JSON.
+## Визуализация
+
+Open3D интерактивный просмотр + легенда (`figures/legend.png`):
+
+```bash
+python scripts/visualization.py \
+  --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz \
+  --predictions predictions/ldgcnn_flash/Mar16_test_GroundTruth/Mar16_test_GroundTruth_predictions.txt \
+  --color_by pred --num_classes 11 \
+  --class_config configs/classes/hessigheim.yaml \
+  --legend --max_points 300000
+
+# Ground Truth
+python scripts/visualization.py 
+  --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz 
+  --color_by gt --num_classes 11 
+  --class_config configs/classes/hessigheim.yaml --legend --max_points 300000
+
+# RGB-раскраска
+python scripts/visualization.py \
+  --data Files/Mar16/LiDAR/Mar16_test_GroundTruth.laz \
+  --color_by rgb --max_points 300000
+```
+
+---
+
+## Дистилляция знаний (финал ВКР)
+
+**Идея:** сжать LDGCNNFlash (931K параметров, 60.88% mIoU) в LDGCNNFlash-Small (266K параметров, каналы 32/64/128 вместо 64/128/256), используя PointTransformer (61.65%) как учителя. Цель — получить модель с в ~3.5× меньшим числом параметров при сохранении mIoU ≥ 0.5.
+
+**Формула KD loss:**
+```
+L = (1 - α) · L_task + α · T² · KL(student_logits/T ‖ teacher_logits/T)
+```
+
+### Параметры дистилляции
+
+| Параметр | Значение | Обоснование |
+|----------|----------|-------------|
+| Учитель | PointTransformer (61.65%) | Лучшая модель; чекпоинт уже есть |
+| Студент-архитектура | `flash_channels=[32, 64, 128]` | 3.5× меньше параметров (266K vs 931K) |
+| `kd_alpha` | 0.5 | Равный баланс task loss и KD loss |
+| `kd_temperature` | 4.0 | Стандартное значение (Hinton et al., 2015); сглаживает soft targets |
+| Task loss | CE + CB-Loss (β=0.99999) | Лучший конфиг для LDGCNNFlash Full |
+| LR, epochs | 0.001, 100 | Те же что у полной модели |
+| Batch size | 16 | Та же что у полной модели |
+
+**Почему temperature=4.0:** при T→1 soft targets близки к one-hot (нет передачи тёмных знаний), при T→∞ все классы одинаково вероятны. T=4 — стандарт литературы, который хорошо работает для задач сегментации с 11 классами.
+
+**Почему α=0.5:** задача сегментации требует точного соответствия меткам (task loss важен). α=0.5 позволяет учителю влиять на обучение, не подавляя сигнал от ground truth.
+
+### Три эксперимента для сравнения
+
+| Run | Архитектура | KD | Ожидаемый результат |
+|-----|------------|-----|-------------------|
+| Small baseline | 32/64/128 (266K) | нет | Нижняя граница |
+| Full + KD | 64/128/256 (931K) | от PT | Проверка: даёт ли KD прирост |
+| **Small + KD** | 32/64/128 (266K) | от PT | **Ключевой результат** |
+
+### Запуск
+
+```bash
+# Все три эксперимента последовательно (авто-resume при прерывании)
+python scripts/run_sweep.py --config configs/sweeps/kd_ldgcnn_flash_small.yaml
+
+# Возобновить только ключевой run
+python scripts/run_sweep.py --config configs/sweeps/kd_ldgcnn_flash_small.yaml \
+  --resume --only_model "LDGCNNFlashSmall+KD"
+
+# Запуск вручную (Small + KD)
+python scripts/train.py --model ldgcnn_flash --flash_channels 32 64 128 \
+  --task segmentation --dataset Mar16 --num_points 4096 --batch_size 16 \
+  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp --seed 42 \
+  --loss_type ce --class_balance effective --class_balance_beta 0.99999 \
+  --kd_teacher_checkpoint checkpoints/loss_sweep/pointtransformer/segmentation/loss_lovasz_g2p0__cb_effective_b0p99999/mar16/best_model.pth \
+  --kd_alpha 0.5 --kd_temperature 4.0 \
+  --cache_mode read --cache_chunked --chunk_size 512 --num_workers 4
+```
+
+Результаты сохраняются в `experiments/distillation/`.
+
+### Файлы на сервер (загрузить)
+
+```
+scripts/train.py                           # KD логика (load_teacher, kd_alpha, kd_temperature)
+scripts/run_sweep.py                       # Поддержка режима runs: + list-аргументы
+src/models/factory.py                      # flash_channels параметр
+configs/sweeps/kd_ldgcnn_flash_small.yaml  # Конфиг 3 экспериментов
+```
+
+### Файлы с сервера (забрать)
+
+```
+experiments/distillation/                  # Логи, метрики, runs_summary.csv
+checkpoints/distillation/                  # best_model.pth для каждого run-а
+mlflow.db                                  # Обновлённая БД метрик
+```
+
+---
+
+## Оптимизация инференса
+
+### GPU (RTX A5000, N=4096, batch=1)
+
+| Модель | Лучший режим | Время | Ускорение |
+|--------|-------------|-------|-----------|
+| PointNet | compile_fp16 | 1.38 мс | 1.8× |
+| DGCNN | compile_fp16 | 3.7 мс | 3.9× |
+| LDGCNNFlash | compile_fp16 | 5.9 мс | 2.5× |
+| PointTransformer | compile_fp32 | 12.8 мс | **11.8×** |
+| LDGCNN | compile_fp16 | 17.1 мс | 2.2× |
+| PointNet++ | fp32 (без ускорения) | ~178 мс | — |
+
+```bash
+# Бенчмарк всех режимов
+python scripts/benchmark_inference.py --all_mar16 \
+  --modes fp32 fp16 compile_fp32 compile_fp16 --batch_size 1 \
+  --output_csv results/benchmark_gpu.csv
+
+# N-sensitivity (скорость + mIoU для N=512–4096)
+python scripts/n_sensitivity.py
+
+# k-sensitivity (граф-модели)
+python scripts/k_sensitivity.py
+
+# INT8 квантизация
+python scripts/optimize_benchmark.py
+```
+
+**CPU:** практичен только PointNet (74 мс FP32, 56 мс ONNX). Граф-модели — O(N²) на CPU.
+
+```bash
+# ONNX-экспорт (opset 18, кроме PointNet++ — dynamic shapes)
+python scripts/export_netron_models.py
+```
+
+---
+
+## Система экспериментов
+
+### MLflow
+
+Все метрики пишутся в `sqlite:///mlflow.db`. Просмотр:
+```bash
+mlflow ui --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns
+```
+
+### Sweeps (автоматические серии запусков)
+
+`scripts/run_sweep.py` читает YAML-конфиги из `configs/sweeps/`. Поддерживает три режима:
+
+| Режим | Ключи YAML | Описание |
+|-------|-----------|----------|
+| `runs` | `runs:` | Список независимых запусков (для KD, сравнений) |
+| `matrix` | `models:` + `loss_configs:` | Полная матрица модель × loss |
+| single-axis | `batch_sizes:` / `class_balance_betas:` | Вариация одного параметра |
+
+Все режимы поддерживают `--resume` (авто-возобновление прерванного) и `--only_model`.
+
+**Проведённые sweeps:**
+
+| Sweep | Конфиг | Результат |
+|-------|--------|-----------|
+| batch_size | `*_batch_sweep.yaml` | Лучшие bs для каждой модели |
+| class_balance_beta | `*_beta_sweep.yaml` | β=0.99999 оптимален |
+| loss functions | `loss_sweep_all_models.yaml` | Lovász/CE + CB-Loss лучшие |
+| comparison Mar18/19 | `comparison_mar18/19.yaml` | Кросс-датасет сравнение |
+| **distillation (KD)** | `kd_ldgcnn_flash_small.yaml` | **В процессе** |
+
+Лучшие гиперпараметры по результатам всех sweeps зафиксированы в `configs/best_params.yaml`.
+
+---
+
+## Результаты
+
+### Точность (Mar16, scene-level voting)
+
+| Модель | mIoU | OA |
+|--------|------|-----|
+| PointTransformer | **61.65%** | — |
+| LDGCNNFlash (Full) | 60.88% | — |
+| LDGCNN-GATv2 | 55.44% | — |
+| LDGCNN-LocalWindow | 55.05% | — |
+| LDGCNN | 54.76% | — |
+| DGCNN | 53.13% | — |
+| PointNet++ | 49.15% | — |
+| PointNet | 42.47% | — |
+
+Подробные результаты по классам, скорости и оптимизации: `results/vkr_tables.xlsx` (генерация: `python scripts/make_vkr_tables.py`).
+
+### Чувствительность к N (GPU, compile_fp16)
+
+При уменьшении N с 4096 до 1024 LDGCNNFlash ускоряется в ~3× при потере mIoU ~3–5%. PointTransformer при N < 2048 деградирует из-за иерархического FPS.
+
+### Чувствительность к k (GPU)
+
+Оптимальный k=16–20 для граф-моделей. Уменьшение до k=8 даёт ~30% ускорение при потере ~1–2% mIoU.
+
+---
+
+## Известные ограничения
+
+- **PointNet++ AMP:** отключён (`amp: false`). NaN во время обучения из-за нестабильности FPS.
+- **Validation mIoU при `--cache_chunked`:** block-level метрика (без scene-level voting). Сравнение моделей корректно (все оценивались одинаково), но абсолютные цифры отличаются от финального `test.py`.
+- **PointNet++ ONNX:** не поддерживается (dynamic shapes в `index_put_`).
+- **INT8 квантизация:** не даёт ускорения для граф-моделей (узкое место — matmul pairwise distance, а не Conv2d).
+
+---
 
 ## Литература
 
-- [PointNet: Deep Learning on Point Sets for 3D Classification and Segmentation](https://arxiv.org/abs/1612.00593)
-- [An In-Depth Look at PointNet](https://medium.com/@luis_gonzales/an-in-depth-look-at-pointnet-111d7efdaa1a)
+1. **PointNet:** Qi, C. R., Su, H., Mo, K., & Guibas, L. J. (2017). PointNet: Deep Learning on Point Sets for 3D Classification and Segmentation. *CVPR 2017*. https://arxiv.org/abs/1612.00593
 
+2. **PointNet++:** Qi, C. R., Yi, L., Su, H., & Guibas, L. J. (2017). PointNet++: Deep Hierarchical Feature Learning on Point Sets in a Metric Space. *NeurIPS 2017*. https://arxiv.org/abs/1706.02413
+
+3. **DGCNN:** Wang, Y., Sun, Y., Liu, Z., Sarma, S. E., Bronstein, M. M., & Solomon, J. M. (2019). Dynamic Graph CNN for Learning on Point Clouds. *ACM Transactions on Graphics, 38*(5). https://arxiv.org/abs/1801.07829
+
+4. **LDGCNN:** Zhang, K., Hao, M., Wang, J., de Silva, C. W., & Fu, C. (2019). Linked Dynamic Graph CNN: Learning on Point Cloud via Linking Hierarchical Features. https://arxiv.org/abs/1904.10014
+
+5. **Point Transformer:** Zhao, H., Jiang, L., Jia, J., Torr, P. H. S., & Koltun, V. (2021). Point Transformer. *ICCV 2021*. https://arxiv.org/abs/2012.09164
+
+6. **Flash Attention:** Dao, T., Fu, D. Y., Ermon, S., Rudra, A., & Ré, C. (2022). FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness. *NeurIPS 2022*. https://arxiv.org/abs/2205.14135
+
+7. **Knowledge Distillation:** Hinton, G., Vinyals, O., & Dean, J. (2015). Distilling the Knowledge in a Neural Network. *NeurIPS Workshop 2015*. https://arxiv.org/abs/1503.02531
+
+8. **Lovász-Softmax:** Berman, M., Rannen Triki, A., & Blaschko, M. B. (2018). The Lovász-Softmax Loss: A Tractable Surrogate for the Optimization of the Intersection-Over-Union Measure in Neural Networks. *CVPR 2018*. https://arxiv.org/abs/1705.08790
+
+9. **Class-Balanced Loss:** Cui, Y., Jia, M., Lin, T.-Y., Song, Y., & Belongie, S. (2019). Class-Balanced Loss Based on Effective Number of Samples. *CVPR 2019*. https://arxiv.org/abs/1901.05555
+
+10. **Hessigheim 3D Dataset:** Kölle, M., Laupheimer, D., Schmohl, S., Haala, N., Rottensteiner, F., Wegner, J. D., & Ledoux, H. (2021). The Hessigheim 3D (H3D) Benchmark on Semantic Segmentation of High-Resolution 3D Point Clouds and Image Data for UAV LiDAR and Image-Based Mapping. *ISPRS Open Journal of Photogrammetry and Remote Sensing, 1*, 100001. https://doi.org/10.1016/j.ophoto.2021.100001
+
+---
 
 ## Автор
 
-Новиченков Ю. Д. - ВКР 2025-2026
-
----
-
-## Эксперимент: функции потерь (Loss Function Sweep)
-
-Сравниваем 5 конфигураций функции потерь на всех 6 моделях (30 запусков).  
-Эксперимент: `VKR_LossSweep`. Датасет: Mar16. 100 эпох, 4096 точек, batch=4, AMP.
-
-### Установка Lovász-Softmax
-
-```bash
-pip install git+https://github.com/bermanmaxim/LovaszSoftmax.git
-# или (PyPI, если доступен):
-pip install lovasz-losses
-```
-
-### Конфигурации
-
-| # | loss_type | class_balance | beta | Описание |
-|---|-----------|--------------|------|----------|
-| A | `ce` | none | — | Baseline CE |
-| B | `ce` | effective | 0.99999 | CE + CB-Loss |
-| C | `focal` | none | — | Focal Loss γ=2 |
-| D | `focal` | effective | 0.99999 | Focal + CB-Loss |
-| E | `lovasz` | effective | 0.99999 | Lovász + CB-Loss |
-
-> **Конфиг B уже выполнен** в рамках VKR_Final_100ep. Можно брать оттуда чекпоинты.
-
----
-
-### PointNet — все конфигурации
-
-```bash
-# A — CE baseline
-python scripts/train.py --model pointnet --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --loss_type ce --seed 42
-
-# B — CE + CB-Loss (уже есть в VKR_Final_100ep, повторять не обязательно)
-python scripts/train.py --model pointnet --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# C — Focal Loss
-python scripts/train.py --model pointnet --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --loss_type focal --focal_gamma 2.0 --seed 42
-
-# D — Focal + CB-Loss
-python scripts/train.py --model pointnet --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# E — Lovász + CB-Loss
-python scripts/train.py --model pointnet --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
-```
-
----
-
-### PointNet++ — все конфигурации
-
-```bash
-# A — CE baseline
-python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.0003 --lr_scheduler cosine \
-  --loss_type ce --seed 42
-
-# B — CE + CB-Loss
-python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.0003 --lr_scheduler cosine \
-  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# C — Focal Loss
-python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.0003 --lr_scheduler cosine \
-  --loss_type focal --focal_gamma 2.0 --seed 42
-
-# D — Focal + CB-Loss
-python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.0003 --lr_scheduler cosine \
-  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# E — Lovász + CB-Loss
-python scripts/train.py --model pointnet++ --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.0003 --lr_scheduler cosine \
-  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
-```
-
----
-
-### DGCNN — все конфигурации
-
-```bash
-# A — CE baseline
-python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --loss_type ce --seed 42
-
-# B — CE + CB-Loss
-python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# C — Focal Loss
-python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --loss_type focal --focal_gamma 2.0 --seed 42
-
-# D — Focal + CB-Loss
-python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# E — Lovász + CB-Loss
-python scripts/train.py --model dgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
-```
-
----
-
-### LDGCNN + GATv2 — все конфигурации
-
-```bash
-# A — CE baseline
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type gatv2 --attention_k 16 --attention_heads 4 \
-  --loss_type ce --seed 42
-
-# B — CE + CB-Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type gatv2 --attention_k 16 --attention_heads 4 \
-  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# C — Focal Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type gatv2 --attention_k 16 --attention_heads 4 \
-  --loss_type focal --focal_gamma 2.0 --seed 42
-
-# D — Focal + CB-Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type gatv2 --attention_k 16 --attention_heads 4 \
-  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# E — Lovász + CB-Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type gatv2 --attention_k 16 --attention_heads 4 \
-  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
-```
-
----
-
-### LDGCNN + LocalWindow — все конфигурации
-
-```bash
-# A — CE baseline
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type local_window --attention_k 16 --attention_heads 4 \
-  --loss_type ce --seed 42
-
-# B — CE + CB-Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type local_window --attention_k 16 --attention_heads 4 \
-  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# C — Focal Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type local_window --attention_k 16 --attention_heads 4 \
-  --loss_type focal --focal_gamma 2.0 --seed 42
-
-# D — Focal + CB-Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type local_window --attention_k 16 --attention_heads 4 \
-  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# E — Lovász + CB-Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type local_window --attention_k 16 --attention_heads 4 \
-  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
-```
-
----
-
-### LDGCNN (без attention) — все конфигурации
-
-```bash
-# A — CE baseline
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type none \
-  --loss_type ce --seed 42
-
-# B — CE + CB-Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type none \
-  --loss_type ce --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# C — Focal Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type none \
-  --loss_type focal --focal_gamma 2.0 --seed 42
-
-# D — Focal + CB-Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type none \
-  --loss_type focal --focal_gamma 2.0 --class_balance effective --class_balance_beta 0.99999 --seed 42
-
-# E — Lovász + CB-Loss
-python scripts/train.py --model ldgcnn --task segmentation --dataset Mar16 \
-  --experiment_name VKR_LossSweep --num_points 4096 --batch_size 4 \
-  --epochs 100 --lr 0.001 --lr_scheduler cosine --amp \
-  --k_small 20 --k_large 40 --attention_type none \
-  --loss_type lovasz --class_balance effective --class_balance_beta 0.99999 --seed 42
-```
+**Новиченков Юрий Дмитриевич** — ВКР, 2025–2026

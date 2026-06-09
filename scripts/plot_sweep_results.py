@@ -60,9 +60,12 @@ def _nice_loss_name(name: str) -> str:
 
 
 def _detect_mode(df: pd.DataFrame) -> str:
-    """matrix если есть колонки model и loss_config_name, иначе single."""
+    """matrix / runs / single — по колонкам CSV."""
     if "model" in df.columns and "loss_config_name" in df.columns:
         return "matrix"
+    # runs-режим: колонка "run" (имя запуска), нет model/loss_config_name
+    if "run" in df.columns and "model" not in df.columns:
+        return "runs"
     return "single"
 
 
@@ -238,6 +241,120 @@ def plot_single_axis(df, summary_path, output_dir):
 
     _plot_per_class_iou_single(ok, x_col, output_dir, prefix, summary_path.parent)
     print(f"Single-axis plots saved to: {output_dir}")
+
+
+# ─────────────────────────── runs-режим графики ───────────────────────────
+
+_RUNS_COLORS = ["#5B9BD5", "#ED7D31", "#70AD47", "#FFC000"]
+
+
+def _bar_runs(df, y_col, out_path, title, ylabel, fmt=".2f"):
+    """Горизонтальный bar-chart: ось Y = имя run, ось X = метрика."""
+    if y_col not in df.columns:
+        return
+    part = df[["run", y_col]].dropna()
+    if part.empty:
+        return
+
+    names = part["run"].tolist()
+    values = part[y_col].tolist()
+    colors = _RUNS_COLORS[:len(names)]
+
+    fig, ax = plt.subplots(figsize=(9, max(3, len(names) * 1.1 + 1)))
+    bars = ax.barh(names, values, color=colors, edgecolor="white", height=0.5)
+    ax.bar_label(bars, fmt=f"%{fmt}", padding=5, fontsize=10)
+    ax.set_xlabel(ylabel)
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    ax.invert_yaxis()
+    ax.grid(axis="x", alpha=0.3)
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+
+
+def _bar_runs_per_class(df, summary_dir, output_dir):
+    """Bar-chart сравнения per-class IoU для runs-режима (если есть JSON-метрики)."""
+    all_data = {}
+    for _, row in df.iterrows():
+        run_name = row.get("run", "?")
+        metrics_path = row.get("metrics_path")
+        if not metrics_path or pd.isna(metrics_path):
+            continue
+        p = Path(str(metrics_path))
+        if not p.exists():
+            # Пробуем рядом с summary_dir
+            p = summary_dir / p.name
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        per_class = data.get("best_val_per_class_iou")
+        if not per_class:
+            continue
+        all_data[run_name] = [v * 100 if max(per_class) <= 1.01 else v for v in per_class]
+
+    if not all_data:
+        return
+
+    num_classes = max(len(v) for v in all_data.values())
+    x = np.arange(num_classes)
+    n_runs = len(all_data)
+    width = 0.8 / max(n_runs, 1)
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    for i, (run_name, iou_list) in enumerate(all_data.items()):
+        offset = (i - n_runs / 2 + 0.5) * width
+        bars = ax.bar(x + offset, iou_list, width, label=run_name,
+                      color=_RUNS_COLORS[i % len(_RUNS_COLORS)], alpha=0.85)
+
+    ax.set_xlabel("Class index")
+    ax.set_ylabel("IoU, %")
+    ax.set_title("Per-class IoU comparison (runs)", fontsize=12, fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(i) for i in range(num_classes)])
+    ax.legend(loc="lower right", fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    plt.savefig(output_dir / "runs_per_class_iou.png", dpi=150)
+    plt.close()
+
+
+def plot_runs(df, summary_path, output_dir):
+    """Bar-charts для runs-режима (KD sweep и подобные)."""
+    if "return_code" in df.columns:
+        ok = df[df["return_code"] == 0].copy()
+    else:
+        ok = df.copy()
+    if ok.empty:
+        print("No successful runs to plot.")
+        return
+
+    _bar_runs(ok, "best_val_miou",
+              output_dir / "runs_best_val_miou.png",
+              "Best Val mIoU by run", "mIoU, %")
+    _bar_runs(ok, "final_val_miou",
+              output_dir / "runs_final_val_miou.png",
+              "Final Val mIoU by run", "mIoU, %")
+    _bar_runs(ok, "best_val_metric",
+              output_dir / "runs_best_val_metric.png",
+              "Best val metric by run", "metric")
+    _bar_runs(ok, "total_train_time_sec",
+              output_dir / "runs_total_train_time.png",
+              "Total training time by run", "seconds", fmt=".0f")
+    _bar_runs(ok, "mean_epoch_time_sec",
+              output_dir / "runs_mean_epoch_time.png",
+              "Mean epoch time by run", "seconds", fmt=".1f")
+    _bar_runs(ok, "max_peak_vram_mb",
+              output_dir / "runs_peak_vram.png",
+              "Peak VRAM by run", "MB", fmt=".0f")
+
+    _bar_runs_per_class(ok, summary_path.parent / "metrics", output_dir)
+
+    print(f"Runs plots saved to: {output_dir}")
 
 
 # ─────────────────────────── matrix графики ───────────────────────────────
@@ -733,6 +850,8 @@ def main():
 
     if mode == "matrix":
         plot_matrix(df, summary_path, output_dir)
+    elif mode == "runs":
+        plot_runs(df, summary_path, output_dir)
     else:
         plot_single_axis(df, summary_path, output_dir)
 

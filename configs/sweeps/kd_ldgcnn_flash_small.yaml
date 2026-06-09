@@ -1,0 +1,73 @@
+# =============================================================================
+# Knowledge Distillation: LDGCNNFlashSmall (32/64/128) vs Full (64/128/256)
+# Учитель: PointTransformer (best_model.pth, 61.65% mIoU)
+#
+# Три запуска для сравнения в ВКР:
+#   1. ldgcnn_flash_small_baseline  — Small без KD (обучение с нуля)
+#   2. ldgcnn_flash_full_kd         — Full + KD от PT (ожидаем ≥ 60.88%)
+#   3. ldgcnn_flash_small_kd        — Small + KD от PT (ключевой результат)
+#
+# Запуск:
+#   python scripts/run_sweep.py --config configs/sweeps/kd_ldgcnn_flash_small.yaml
+#   python scripts/run_sweep.py --config configs/sweeps/kd_ldgcnn_flash_small.yaml \
+#       --resume --only_model "LDGCNNFlashSmall+KD"
+# =============================================================================
+
+output_root: experiments/distillation
+
+# Общие параметры
+defaults: &defaults
+  model: ldgcnn_flash
+  task: segmentation
+  dataset: Mar16
+  num_points: 4096
+  epochs: 100
+  seed: 42
+  lr: 0.001
+  lr_scheduler: cosine
+  amp: true
+  loss_type: ce
+  class_balance: effective
+  class_balance_beta: 0.99999
+  cache_mode: read
+  cache_chunked: true
+  chunk_size: 512
+  num_workers: 4
+  attention_heads: 4
+  attention_dropout: 0.1
+  batch_size: 16
+
+# Путь к лучшему чекпоинту PointTransformer (учитель)
+# Выбран: loss_lovasz + CB-Loss — лучший конфиг из loss sweep (61.65% mIoU)
+_teacher: &teacher
+  checkpoints/loss_sweep/pointtransformer/segmentation/loss_lovasz_g2p0__cb_effective_b0p99999/mar16/best_model.pth
+
+runs:
+
+  - name: LDGCNNFlashSmall_baseline
+    display_name: LDGCNNFlashSmall (baseline, no KD)
+    description: "Small архитектура (32/64/128) обучена с нуля, без учителя. Нижняя граница."
+    params:
+      <<: *defaults
+      flash_channels: [32, 64, 128]
+      # без KD — kd_teacher_checkpoint не задан
+
+  - name: LDGCNNFlash_full_kd
+    display_name: LDGCNNFlash Full+KD
+    description: "Full архитектура (64/128/256) с KD от PointTransformer. Проверка: даёт ли KD прирост mIoU."
+    params:
+      <<: *defaults
+      flash_channels: [64, 128, 256]
+      kd_teacher_checkpoint: *teacher
+      kd_alpha: 0.5
+      kd_temperature: 4.0
+
+  - name: LDGCNNFlashSmall_kd
+    display_name: LDGCNNFlashSmall+KD
+    description: "Small архитектура (32/64/128) + KD от PointTransformer. Ключевой результат ВКР."
+    params:
+      <<: *defaults
+      flash_channels: [32, 64, 128]
+      kd_teacher_checkpoint: *teacher
+      kd_alpha: 0.5
+      kd_temperature: 4.0

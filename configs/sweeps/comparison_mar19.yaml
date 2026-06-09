@@ -20,8 +20,8 @@ models:
   - name: pointnet++
     model: "pointnet++"
     train_args:
-      lr: 0.001
-      amp: true
+      lr: 0.0003          # пониженный lr — нестабильность с AMP
+      amp: false          # AMP отключён: NaN при fp16 (FPS нестабильность)
       batch_size: 16
       loss_type: lovasz
       class_balance: effective
@@ -35,6 +35,20 @@ models:
       batch_size: 4
       k: 20
       loss_type: lovasz
+      class_balance: effective
+      class_balance_beta: 0.99999
+
+  - name: ldgcnn
+    model: ldgcnn
+    train_args:
+      lr: 0.001
+      amp: true
+      batch_size: 16
+      k_small: 20
+      k_large: 40
+      attention_type: none
+      loss_type: focal
+      focal_gamma: 2.0
       class_balance: effective
       class_balance_beta: 0.99999
 
@@ -52,13 +66,29 @@ models:
       attention_dropout: 0.1
       loss_type: ce
       class_balance: effective
+      class_balance_beta: 0.9999   # 4 девятки — лучший beta из sweep
+
+  - name: ldgcnn_localwin
+    model: ldgcnn
+    train_args:
+      lr: 0.001
+      amp: true
+      batch_size: 16
+      k_small: 20
+      k_large: 40
+      attention_type: local_window
+      attention_k: 16
+      attention_heads: 4
+      attention_dropout: 0.1
+      loss_type: lovasz
+      class_balance: effective
       class_balance_beta: 0.99999
 
   - name: pointtransformer
     model: pointtransformer
     train_args:
       lr: 0.001
-      amp: true
+      amp: false          # AMP отключён: NaN при fp16 (square_distance нестабильность)
       batch_size: 4
       pt_k: 16
       loss_type: ce
@@ -80,13 +110,15 @@ models:
 
 # Один пустой loss_config — не перезаписывает train_args моделей
 loss_configs:
-  - name: best_from_mar16
+  - name: best_params
 
 output_root: experiments/comparison
 
 common_args:
   num_points: 4096
-  epochs: 100
+  # Mar19 датасет больше Mar16 → эпоха длится значительно дольше.
+  # 40 эпох достаточно при большом числе обновлений весов за эпоху.
+  epochs: 40
   seed: 42
   deterministic: false
   cache_dir: cache
@@ -96,4 +128,4 @@ common_args:
   num_workers: 4
   lr_scheduler: cosine
   checkpoints_root: checkpoints/comparison
-  early_stopping_patience: 20
+  early_stopping_patience: 8

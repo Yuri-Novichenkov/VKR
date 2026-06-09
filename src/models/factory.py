@@ -28,6 +28,7 @@ def build_model(
     attention_dropout: float = 0.1,
     pt_k: int = 16,
     pt_channels: tuple = (32, 64, 128, 256, 512),
+    flash_channels: tuple = (64, 128, 256),
     fast_knn: bool = False,
 ):
     """Создаёт модель по строковому имени архитектуры и задачи.
@@ -101,6 +102,7 @@ def build_model(
             num_classes=num_classes,
             num_features=num_features,
             k=k,
+            channels=flash_channels,
             num_heads=attention_heads,
             dropout=attention_dropout,
             fast_knn=fast_knn,

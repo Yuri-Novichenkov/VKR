@@ -1,0 +1,343 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 760" width="920" height="760">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#555"/>
+    </marker>
+    <marker id="arr-kd" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#1B3A6B"/>
+    </marker>
+    <marker id="arr-dash" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#B8960C"/>
+    </marker>
+  </defs>
+
+  <!-- BACKGROUND -->
+  <rect width="920" height="760" fill="#F7F8FA"/>
+
+  <!-- ═══ TITLE ═══════════════════════════════════════════════════════════ -->
+  <rect x="0" y="0" width="920" height="46" fill="#1B3A6B"/>
+  <text x="460" y="29" text-anchor="middle"
+        font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="white">
+    Программный комплекс анализа LiDAR-данных
+  </text>
+  <text x="460" y="41" text-anchor="middle"
+        font-family="Arial, sans-serif" font-size="9" fill="#AAC4E8">
+    Hessigheim 3D (H3D) · 11 классов · N = 4 096 точек/окно
+  </text>
+
+  <!-- ═══ RIGHT COLUMN ═════════════════════════════════════════════════════ -->
+  <rect x="699" y="58" width="213" height="686" rx="6"
+        fill="#FFFDF0" stroke="#E8D44D" stroke-width="1.2"/>
+
+  <!-- Configs header -->
+  <rect x="699" y="58" width="213" height="22" rx="6" fill="#F0C040"/>
+  <rect x="699" y="68" width="213" height="12" fill="#F0C040"/>
+  <text x="805" y="73" text-anchor="middle"
+        font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#3D2000">
+    ⚙ Конфигурации (configs/)
+  </text>
+
+  <rect x="709" y="86" width="193" height="25" rx="3" fill="#FFF3B0" stroke="#E8D44D" stroke-width="0.8"/>
+  <text x="805" y="98" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#5C3D00">best_params.yaml</text>
+  <text x="805" y="108" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#666">лучшие гиперпараметры</text>
+
+  <rect x="709" y="116" width="193" height="25" rx="3" fill="#FFF3B0" stroke="#E8D44D" stroke-width="0.8"/>
+  <text x="805" y="128" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#5C3D00">sweeps/*.yaml</text>
+  <text x="805" y="138" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#666">конфигурации экспериментов</text>
+
+  <rect x="709" y="146" width="193" height="25" rx="3" fill="#FFF3B0" stroke="#E8D44D" stroke-width="0.8"/>
+  <text x="805" y="158" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#5C3D00">classes/hessigheim.yaml</text>
+  <text x="805" y="168" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#666">метки 11 классов + цвета</text>
+
+  <line x1="709" y1="180" x2="902" y2="180" stroke="#E8D44D" stroke-width="0.8" stroke-dasharray="4,3"/>
+  <text x="805" y="194" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#5C3D00">Утилиты (src/utils/)</text>
+
+  <rect x="709" y="199" width="193" height="21" rx="3" fill="#FFF3B0" stroke="#E8D44D" stroke-width="0.8"/>
+  <text x="805" y="213" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#444">point_ops.py — kNN, EdgeConv</text>
+
+  <rect x="709" y="225" width="193" height="21" rx="3" fill="#FFF3B0" stroke="#E8D44D" stroke-width="0.8"/>
+  <text x="805" y="239" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#444">metrics.py — mIoU, Accuracy</text>
+
+  <!-- note about losses -->
+  <text x="805" y="259" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#888" font-style="italic">CE / Focal / Lovász + CB-Loss</text>
+  <text x="805" y="270" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#888" font-style="italic">реализованы внутри train.py</text>
+
+  <line x1="709" y1="280" x2="902" y2="280" stroke="#E8D44D" stroke-width="0.8" stroke-dasharray="4,3"/>
+
+  <!-- Legend -->
+  <text x="805" y="294" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#333">Условные обозначения</text>
+
+  <rect x="714" y="300" width="13" height="11" rx="2" fill="#DEEAF1" stroke="#9DC3E6"/>
+  <text x="733" y="310" font-family="Arial, sans-serif" font-size="8" fill="#333">Входные данные</text>
+
+  <rect x="714" y="317" width="13" height="11" rx="2" fill="#E2EFDA" stroke="#A9D18E"/>
+  <text x="733" y="327" font-family="Arial, sans-serif" font-size="8" fill="#333">Предобработка данных</text>
+
+  <rect x="714" y="334" width="13" height="11" rx="2" fill="#FFF0A0" stroke="#E8D44D"/>
+  <text x="733" y="344" font-family="Arial, sans-serif" font-size="8" fill="#333">Модели сравнения</text>
+
+  <rect x="714" y="351" width="13" height="11" rx="2" fill="#ED7D31" stroke="#C55A11"/>
+  <text x="733" y="361" font-family="Arial, sans-serif" font-size="8" fill="#333">LDGCNNFlash (полная)</text>
+
+  <rect x="714" y="368" width="13" height="11" rx="2" fill="#4472C4" stroke="#2F5496"/>
+  <text x="733" y="378" font-family="Arial, sans-serif" font-size="8" fill="#333">PointTransformer (учитель KD)</text>
+
+  <rect x="714" y="385" width="13" height="11" rx="2" fill="#FF9900" stroke="#CC7700"/>
+  <text x="733" y="395" font-family="Arial, sans-serif" font-size="8" fill="#333">LDGCNNFlash-Small ★ ФИНАЛ</text>
+
+  <rect x="714" y="402" width="13" height="11" rx="2" fill="#E8D5F5" stroke="#B590D5"/>
+  <text x="733" y="412" font-family="Arial, sans-serif" font-size="8" fill="#333">Модуль обучения</text>
+
+  <rect x="714" y="419" width="13" height="11" rx="2" fill="#D3EEF8" stroke="#6BBAD5"/>
+  <text x="733" y="429" font-family="Arial, sans-serif" font-size="8" fill="#333">Модуль инференса</text>
+
+  <line x1="709" y1="438" x2="902" y2="438" stroke="#E8D44D" stroke-width="0.8" stroke-dasharray="4,3"/>
+
+  <!-- mIoU note -->
+  <text x="805" y="452" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333">Примечание</text>
+  <text x="805" y="464" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">mIoU — тест. выборка Mar16</text>
+  <text x="805" y="475" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">со сценовым голосованием</text>
+  <text x="805" y="487" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">❄ — параметры заморожены</text>
+  <text x="805" y="499" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">◆ — предлагаемый метод</text>
+  <text x="805" y="511" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">★ — финальная модель работы</text>
+
+  <!-- dashed arrows from right column to main flow -->
+  <line x1="699" y1="215" x2="660" y2="215" stroke="#B8960C" stroke-width="1.1"
+        stroke-dasharray="4,3" marker-end="url(#arr-dash)"/>
+  <line x1="699" y1="440" x2="688" y2="440" stroke="#B8960C" stroke-width="1.1"
+        stroke-dasharray="4,3" marker-end="url(#arr-dash)"/>
+
+  <!-- ═══ SECTION 1 — ВХОДНЫЕ ДАННЫЕ ══════════════════════════════════════ -->
+  <rect x="10" y="58" width="680" height="16" rx="3" fill="#BDD7EE" opacity="0.85"/>
+  <text x="350" y="70" text-anchor="middle"
+        font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#1F4E79">
+    ВХОДНЫЕ ДАННЫЕ  (Files/…/LiDAR/)
+  </text>
+
+  <!-- Mar16 -->
+  <rect x="13" y="78" width="205" height="56" rx="5" fill="#DEEAF1" stroke="#9DC3E6" stroke-width="1.2"/>
+  <text x="115" y="95" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#1F4E79">Датасет Mar16</text>
+  <text x="115" y="108" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#444">~2.2M точек (train+val+test)</text>
+  <text x="115" y="121" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#777">~1.4M на train · 11 классов (.laz)</text>
+  <text x="115" y="130" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#0070C0" font-weight="bold">основной датасет экспериментов</text>
+
+  <!-- Mar18 -->
+  <rect x="228" y="78" width="205" height="56" rx="5" fill="#DEEAF1" stroke="#9DC3E6" stroke-width="1.2"/>
+  <text x="330" y="95" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#1F4E79">Датасет Mar18</text>
+  <text x="330" y="108" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#444">~63M точек (train+val)</text>
+  <text x="330" y="121" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#777">11 классов · (.laz)</text>
+  <text x="330" y="130" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#0070C0" font-weight="bold">сравнение на большом датасете</text>
+
+  <!-- Mar19 — не используется -->
+  <rect x="443" y="78" width="244" height="56" rx="5" fill="#F0F0F0" stroke="#C0C0C0" stroke-width="1.2" opacity="0.7"/>
+  <text x="565" y="95" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#888">Датасет Mar19</text>
+  <text x="565" y="108" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#999">~55M точек (train+val)</text>
+  <text x="565" y="121" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#999">11 классов · (.laz)</text>
+  <text x="565" y="131" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#B00000" font-style="italic">не используется в данной работе</text>
+
+  <!-- arrow down -->
+  <line x1="232" y1="134" x2="232" y2="150" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ═══ SECTION 2 — МОДУЛЬ ДАННЫХ ════════════════════════════════════════ -->
+  <rect x="10" y="154" width="456" height="80" rx="6" fill="#E2EFDA" stroke="#A9D18E" stroke-width="1.5"/>
+  <text x="238" y="169" text-anchor="middle"
+        font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#375623">
+    Модуль данных  (src/data/)
+  </text>
+
+  <rect x="18" y="175" width="132" height="50" rx="4" fill="#C6E0B4" stroke="#A9D18E" stroke-width="1"/>
+  <text x="84" y="190" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#375623">io.py</text>
+  <text x="84" y="203" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#444">load_dataframe()</text>
+  <text x="84" y="215" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#666">.laz → .las → .txt</text>
+
+  <rect x="158" y="175" width="148" height="50" rx="4" fill="#C6E0B4" stroke="#A9D18E" stroke-width="1"/>
+  <text x="232" y="190" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#375623">LiDARDataset</text>
+  <text x="232" y="203" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#444">скользящее окно N точек</text>
+  <text x="232" y="215" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#666">нормализация · аугментация</text>
+
+  <rect x="314" y="175" width="145" height="50" rx="4" fill="#C6E0B4" stroke="#A9D18E" stroke-width="1"/>
+  <text x="386" y="190" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#375623">Кэш + Голосование</text>
+  <text x="386" y="203" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#444">чанки по 512 окон (.npy)</text>
+  <text x="386" y="215" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#666">vote_counts · сценовой уровень</text>
+
+  <!-- arrow down -->
+  <line x1="232" y1="234" x2="232" y2="250" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ═══ SECTION 3 — МОДУЛЬ СРАВНЕНИЯ МОДЕЛЕЙ ══════════════════════════════ -->
+  <rect x="10" y="254" width="680" height="128" rx="6" fill="#FFF8DC" stroke="#FFCF40" stroke-width="1.5"/>
+  <text x="350" y="270" text-anchor="middle"
+        font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#7D5700">
+    Модуль сравнения моделей  (src/models/)  —  build_model()
+  </text>
+
+  <!-- Row 1: 4 models -->
+  <rect x="17"  y="277" width="153" height="44" rx="4" fill="#FFF0A0" stroke="#FFCF40" stroke-width="1"/>
+  <text x="93"  y="293" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#5C4000">PointNet</text>
+  <text x="93"  y="306" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#777">TNet + shared MLP · 35.62%</text>
+
+  <rect x="178" y="277" width="153" height="44" rx="4" fill="#FFF0A0" stroke="#FFCF40" stroke-width="1"/>
+  <text x="254" y="293" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#5C4000">PointNet++</text>
+  <text x="254" y="306" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#777">FPS + Set Abstraction · 44.69%</text>
+
+  <rect x="339" y="277" width="153" height="44" rx="4" fill="#FFF0A0" stroke="#FFCF40" stroke-width="1"/>
+  <text x="415" y="293" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#5C4000">DGCNN</text>
+  <text x="415" y="306" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#777">Dynamic Graph EdgeConv · 55.45%</text>
+
+  <rect x="500" y="277" width="183" height="44" rx="4" fill="#FFF0A0" stroke="#FFCF40" stroke-width="1"/>
+  <text x="591" y="290" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#5C4000">LDGCNN (base)</text>
+  <text x="591" y="303" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#777">EdgeConv XYZ-простр. · 53.75%</text>
+  <text x="591" y="314" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#AAA">+ GATv2 (55.05%) · +LocalWin (55.97%)</text>
+
+  <!-- Row 2: 3 models -->
+  <rect x="17"  y="328" width="210" height="46" rx="4" fill="#FAD7A0" stroke="#F0A030" stroke-width="1"/>
+  <text x="122" y="344" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#5C4000">LDGCNN-GATv2</text>
+  <text x="122" y="357" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#666">+ GATv2 внимание · mIoU 55.05%</text>
+
+  <rect x="235" y="328" width="210" height="46" rx="4" fill="#FAD7A0" stroke="#F0A030" stroke-width="1"/>
+  <text x="340" y="344" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#5C4000">LDGCNN-LocalWin</text>
+  <text x="340" y="357" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#666">+ локальное окно · mIoU 55.97%</text>
+
+  <rect x="453" y="328" width="230" height="46" rx="4" fill="#ED7D31" stroke="#C55A11" stroke-width="1.5"/>
+  <text x="568" y="342" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="white">LDGCNNFlash (полная) ◆</text>
+  <text x="568" y="355" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#FFE0C0">Flash SDPA · 932K пар. · 60.88%</text>
+  <text x="568" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#FFCCA0">каналы: 64→128→256</text>
+
+  <!-- arrow down -->
+  <line x1="350" y1="382" x2="350" y2="398" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ═══ SECTION 4 — ДИСТИЛЛЯЦИЯ ЗНАНИЙ (ГЛАВНЫЙ БЛОК) ════════════════════ -->
+  <rect x="10" y="402" width="680" height="126" rx="8"
+        fill="#EEF5FF" stroke="#1B3A6B" stroke-width="2.5"/>
+  <!-- header bg -->
+  <rect x="10" y="402" width="680" height="24" rx="8" fill="#1B3A6B"/>
+  <rect x="10" y="416" width="680" height="10" fill="#1B3A6B"/>
+  <text x="350" y="419" text-anchor="middle"
+        font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="white">
+    Дистилляция знаний (Knowledge Distillation)  —  финальный этап
+  </text>
+
+  <!-- TEACHER box -->
+  <rect x="20" y="430" width="192" height="90" rx="6"
+        fill="#D6E4F7" stroke="#4472C4" stroke-width="2"/>
+  <rect x="20" y="430" width="192" height="18" rx="6" fill="#4472C4"/>
+  <rect x="20" y="440" width="192" height="8" fill="#4472C4"/>
+  <text x="116" y="443" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="bold" fill="white">УЧИТЕЛЬ  ❄ заморожен</text>
+  <text x="116" y="461" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#1F3878">PointTransformer</text>
+  <text x="116" y="474" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#333">3 070 347 параметров</text>
+  <text x="116" y="487" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#333">mIoU 61.65%  (Mar16, тест)</text>
+  <text x="116" y="500" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">лучший из сравнения</text>
+  <text x="116" y="513" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#1565C0">U-Net + vector self-attention</text>
+
+  <!-- KD arrow -->
+  <line x1="212" y1="475" x2="282" y2="475" stroke="#1B3A6B" stroke-width="3" marker-end="url(#arr-kd)"/>
+  <!-- KD label above arrow -->
+  <text x="247" y="463" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#1B3A6B">KD Loss</text>
+  <!-- formula below -->
+  <text x="247" y="487" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#333">L=(1-α)·L</text>
+  <text x="247" y="498" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#333">+α·T²·KL</text>
+  <text x="247" y="510" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#666">α=0.5, T=4.0</text>
+
+  <!-- STUDENT box — FINAL MODEL, most prominent -->
+  <rect x="286" y="426" width="396" height="98" rx="8"
+        fill="#FFF3E0" stroke="#FF8C00" stroke-width="3"/>
+  <!-- star badge -->
+  <rect x="286" y="426" width="396" height="22" rx="8" fill="#FF8C00"/>
+  <rect x="286" y="438" width="396" height="10" fill="#FF8C00"/>
+  <text x="484" y="441" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="white">
+    ★  ФИНАЛЬНАЯ МОДЕЛЬ  ★
+  </text>
+  <text x="484" y="464" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="bold" fill="#7B3F00">LDGCNNFlash-Small</text>
+  <text x="484" y="479" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#444">каналы 32→64→128  ·  266 112 параметров  (×3.5 меньше полной)</text>
+  <text x="484" y="493" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#CC4400">mIoU 56.03%  (Mar16, тест)</text>
+  <text x="484" y="507" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#666">Flash Self-Attention (SDPA)  ·  УЧЕНИК в схеме KD  ·  --flash_channels 32 64 128</text>
+  <text x="484" y="518" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#888">компактная модель для задач реального времени</text>
+
+  <!-- arrow down from KD section -->
+  <line x1="350" y1="528" x2="350" y2="544" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ═══ SECTION 5 — ОБУЧЕНИЕ и ИНФЕРЕНС ══════════════════════════════════ -->
+  <!-- Training -->
+  <rect x="10" y="548" width="326" height="90" rx="6" fill="#EAD9F7" stroke="#B085D0" stroke-width="1.5"/>
+  <text x="173" y="564" text-anchor="middle"
+        font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#4B1A80">
+    Модуль обучения
+  </text>
+
+  <rect x="18" y="570" width="148" height="26" rx="3" fill="#D4AAEE" stroke="#B085D0" stroke-width="0.8"/>
+  <text x="92" y="581" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#2E0060">train.py</text>
+  <text x="92" y="591" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">AMP · Adam · CosineAnneal</text>
+
+  <rect x="174" y="570" width="154" height="26" rx="3" fill="#D4AAEE" stroke="#B085D0" stroke-width="0.8"/>
+  <text x="251" y="581" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#2E0060">run_sweep.py</text>
+  <text x="251" y="591" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">матрица · авто-резюме</text>
+
+  <rect x="18" y="602" width="148" height="28" rx="3" fill="#E5C8F8" stroke="#B085D0" stroke-width="0.8"/>
+  <text x="92" y="613" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#333">CE / Focal / Lovász</text>
+  <text x="92" y="624" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">+ Class-Balance Loss</text>
+
+  <rect x="174" y="602" width="154" height="28" rx="3" fill="#E5C8F8" stroke="#B085D0" stroke-width="0.8"/>
+  <text x="251" y="613" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#333">Early stopping</text>
+  <text x="251" y="624" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">patience=8 · Checkpoint</text>
+
+  <!-- Inference -->
+  <rect x="346" y="548" width="344" height="90" rx="6" fill="#D3EEF8" stroke="#6BBAD5" stroke-width="1.5"/>
+  <text x="518" y="564" text-anchor="middle"
+        font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#09507A">
+    Модуль инференса и анализа
+  </text>
+
+  <rect x="354" y="570" width="152" height="26" rx="3" fill="#A9D6EC" stroke="#6BBAD5" stroke-width="0.8"/>
+  <text x="430" y="581" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#09507A">test.py</text>
+  <text x="430" y="591" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">сценовое голосование · mIoU</text>
+
+  <rect x="514" y="570" width="168" height="26" rx="3" fill="#A9D6EC" stroke="#6BBAD5" stroke-width="0.8"/>
+  <text x="598" y="581" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#09507A">predictions.py</text>
+  <text x="598" y="591" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">предсказания на облаке</text>
+
+  <rect x="354" y="602" width="152" height="28" rx="3" fill="#C4E8F5" stroke="#6BBAD5" stroke-width="0.8"/>
+  <text x="430" y="613" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#333">benchmark_inference.py</text>
+  <text x="430" y="624" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">fp32/fp16/compile · ONNX</text>
+
+  <rect x="514" y="602" width="168" height="28" rx="3" fill="#C4E8F5" stroke="#6BBAD5" stroke-width="0.8"/>
+  <text x="598" y="613" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#333">n_sensitivity / k_sensitivity</text>
+  <text x="598" y="624" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#555">анализ влияния N и k</text>
+
+  <!-- fork arrows down -->
+  <line x1="92"  y1="638" x2="92"  y2="652" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="251" y1="638" x2="251" y2="652" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="430" y1="638" x2="430" y2="652" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="598" y1="638" x2="598" y2="652" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ═══ SECTION 6 — ВЫХОДНЫЕ ДАННЫЕ ══════════════════════════════════════ -->
+  <rect x="10"  y="656" width="155" height="62" rx="5" fill="#F5CCD0" stroke="#D04040" stroke-width="1.2"/>
+  <text x="87"  y="671" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#800000">MLflow</text>
+  <text x="87"  y="683" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#444">sqlite:///mlflow.db</text>
+  <text x="87"  y="695" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#666">эксперименты · параметры</text>
+  <text x="87"  y="707" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#666">артефакты · метрики</text>
+
+  <rect x="173" y="656" width="155" height="62" rx="5" fill="#D5DCF0" stroke="#5070B0" stroke-width="1.2"/>
+  <text x="250" y="671" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#1F3878">Чекпоинты</text>
+  <text x="250" y="683" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#444">best_model.pth</text>
+  <text x="250" y="695" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#666">last_checkpoint.pth</text>
+  <text x="250" y="707" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#666">checkpoints/.../mar16/</text>
+
+  <rect x="336" y="656" width="192" height="62" rx="5" fill="#D5EDD0" stroke="#50A040" stroke-width="1.2"/>
+  <text x="432" y="671" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#1A5E10">Метрики и предсказания</text>
+  <text x="432" y="683" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#444">metrics.json · mIoU по классам</text>
+  <text x="432" y="695" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#666">*_predictions.txt · облако меток</text>
+  <text x="432" y="707" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#666">visualization.py · Open3D</text>
+
+  <rect x="536" y="656" width="154" height="62" rx="5" fill="#FCE5CC" stroke="#D07020" stroke-width="1.2"/>
+  <text x="613" y="671" text-anchor="middle" font-family="Arial, sans-serif" font-size="9.5" font-weight="bold" fill="#783F04">Отчётность</text>
+  <text x="613" y="683" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#444">make_vkr_tables.py</text>
+  <text x="613" y="695" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#666">vkr_tables.xlsx · 7 листов</text>
+  <text x="613" y="707" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.5" fill="#666">графики · бенчмарки</text>
+
+  <!-- bottom rule -->
+  <line x1="10" y1="730" x2="910" y2="730" stroke="#CCC" stroke-width="0.8"/>
+  <text x="460" y="746" text-anchor="middle"
+        font-family="Arial, sans-serif" font-size="8.5" fill="#999">
+    Python 3.11 · PyTorch 2.x · MLflow · Open3D · NumPy · openpyxl
+  </text>
+
+</svg>

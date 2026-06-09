@@ -154,7 +154,8 @@ def eval_accuracy(model, num_classes, device, dataset):
         sample_offset = 0
         for features, labels in loader:
             features = features.to(device)
-            logits = model(features)                          # (B, N, C)
+            out = model(features)
+            logits = out[0] if isinstance(out, tuple) else out  # PointNet возвращает (x, t1, t2)
             preds = logits.argmax(dim=-1).cpu().numpy()       # (B, N)
             bsz = preds.shape[0]
             for b in range(bsz):
@@ -229,7 +230,7 @@ def main():
 
             speedup = f"{baseline_ms/ms:.2f}x"
             miou_str = f"{miou:.2f}" if miou is not None else "—"
-            marker = " ← baseline" if k == baseline_k else ""
+            marker = " <- baseline" if k == baseline_k else ""
             print(f"  {k:>4}  {ms:>8.2f}  {speedup:>8}  {miou_str:>8}{marker}")
 
             all_results.append({
